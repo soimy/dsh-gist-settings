@@ -341,6 +341,39 @@ await check('profileFiles config decides what is tracked', async () => {
   assert.deepEqual(Object.keys(gist.files), ['package.json'])
 })
 
+/* ------------------------------------------------- case-insensitive aliasing -- */
+
+await check('a name differing only in case cannot create a second gist', async () => {
+  // Windows and macOS treat `CASECHECK` and `casecheck` as one directory, so
+  // accepting both would back one profile up twice and let the copies diverge.
+  await seed('casecheck', { 'cordis.patch.yml': 'c\n' })
+  const before = Object.keys((await store()).gists).length
+
+  const first = await core.uploadProfile('casecheck', { ghPath, config })
+  assert.ok(first.gistId)
+
+  await assert.rejects(
+    () => core.uploadProfile('CASECHECK', { ghPath, config }),
+    /differs only in case/,
+  )
+  await assert.rejects(
+    () => core.downloadProfile('CASECHECK', { ghPath, config }),
+    /differs only in case/,
+  )
+
+  const after = Object.keys((await store()).gists).length
+  assert.equal(after, before + 1, 'exactly one gist may exist for the one directory')
+
+  const state = await core.loadState(config)
+  const variants = Object.keys(state.profiles).filter((key) => key.toLowerCase() === 'casecheck')
+  assert.deepEqual(variants, ['casecheck'], 'only the exact name may be recorded')
+})
+
+await check('a profile tracked under one case stays readable under that exact name', async () => {
+  const status = await core.profileStatus('casecheck', { ghPath, config })
+  assert.equal(status.status, 'in-sync')
+})
+
 /* ------------------------------------------------------- gh discovery paths -- */
 
 await check('health() still reports paths when gh cannot be found', async () => {

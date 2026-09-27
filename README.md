@@ -16,7 +16,7 @@ guarded two-way sync are exposed as agent tools, so you can drive them from a co
 | Sync engine (`lib/core.js`) | Done |
 | Host plugin + agent tools | **Installed and live**; callable from a session |
 | Real GitHub round-trip | **Verified** against a real account |
-| Test suite | **111 offline cases + 10 live cases**, all passing |
+| Test suite | **116 offline cases + 10 live cases**, all passing |
 | Client settings page | Not started — see [The settings page](#the-settings-page) |
 | Licence | MIT |
 
@@ -88,6 +88,12 @@ the plugin has taken. Deleting it loses the mapping and the local backups, but n
 All four accept an optional `profile`; omitting it operates on every profile. A failure on one
 profile never aborts the others. Every argument is type-checked — a wrong type or an unknown key is
 an error, never a silent coercion, so `force: "false"` cannot become a forced overwrite.
+
+**Profile names are matched exactly.** `ALPHA` is refused when the directory is `alpha`, because on
+Windows and macOS those name one directory and accepting both would back it up twice, into two gists
+that then diverge silently. The error names the real profile. An unknown name is refused with the
+list of the ones that exist, rather than failing later with a confusing "has none of the tracked
+files".
 
 ### Status vocabulary
 
@@ -183,7 +189,7 @@ cordis.patch.yml       Bundle patch (inserts the plugin row; documents config)
 client.js              Client settings page (not yet written)
 locale/{en,zh}.json    Plugin display metadata for Plugin Manager cards
 icon.svg               Bundle icon
-test/                  111 offline cases across four suites, plus 10 live ones
+test/                  116 offline cases across four suites, plus 10 live ones
 scripts/               check-changelog.mjs — validates CHANGELOG.md
 .github/               Issue forms and the pull-request template
 ```
@@ -200,7 +206,7 @@ scripts/               check-changelog.mjs — validates CHANGELOG.md
 ## Development
 
 ```bash
-npm test                # the four offline suites (111 cases) plus the changelog check
+npm test                # the four offline suites (116 cases) plus the changelog check
 npm run test:sync       # engine lifecycle against a fake gh
 npm run test:tools      # tool layer, argument validation, failure isolation
 npm run test:schema     # definitions vs. the installed Harness validators

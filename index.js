@@ -121,6 +121,53 @@ function assertProfileName(name) {
   return name
 }
 
+/**
+ * Resolve a requested profile name to the name that actually exists.
+ *
+ * On a case-insensitive filesystem `ALPHA` and `alpha` are the same directory,
+ * so accepting both would mint two secret gists and two state entries for one
+ * profile. The requested name is matched exactly and a case-only variant is
+ * refused with the real name attached — silently rewriting it to a different
+ * name than the caller asked for is exactly the kind of guess this plugin
+ * avoids everywhere else.
+ *
+ * A name that matches nothing is also refused, listing what does exist, rather
+ * than failing later with a confusing "has none of the tracked files".
+ */
+async function resolveProfileArg(name, config) {
+  const wanted = assertProfileName(name)
+  const known = await core.listProfiles(config)
+  const state = await core.loadState(config)
+  const tracked = Object.keys(state.profiles ?? {})
+
+  if (known.includes(wanted)) return wanted
+
+  const directoryVariant = known.find((entry) => entry.toLowerCase() === wanted.toLowerCase())
+  if (directoryVariant) {
+    throw new Error(
+      `profile "${wanted}" is not the name of a profile directory; "${directoryVariant}" is. Names ` +
+        'are matched exactly, so that a difference of case alone cannot create a second gist for ' +
+        'the same directory.',
+    )
+  }
+
+  // Not on disk. Allowed only for a profile this machine already tracks under
+  // exactly this name — its directory may have been deleted and a download
+  // recreates it.
+  if (tracked.includes(wanted)) return wanted
+
+  const trackedVariant = tracked.find((entry) => entry.toLowerCase() === wanted.toLowerCase())
+  if (trackedVariant) {
+    throw new Error(
+      `profile "${wanted}" is tracked as "${trackedVariant}"; use that exact name, so that a ` +
+        'difference of case alone cannot create a second gist for the same directory.',
+    )
+  }
+
+  const pool = [...new Set([...known, ...tracked])].sort()
+  throw new Error(`unknown profile "${wanted}"; known profiles: ${pool.join(', ') || '(none)'}`)
+}
+
 /* ------------------------------------------------------------- formatting -- */
 
 const STATUS_LABEL = {
@@ -276,7 +323,7 @@ function buildTools(ctx, userConfig) {
       const signal = exec?.signal
       const h = await core.health(config)
       const state = await core.loadState(config)
-      const names = profile ? [assertProfileName(profile)] : await core.listProfiles(config)
+      const names = profile ? [await resolveProfileArg(profile, config)] : await core.listProfiles(config)
       const online = h.gh.found && h.auth?.authenticated === true
       const rows = []
       for (const name of names) {
@@ -343,7 +390,7 @@ function buildTools(ctx, userConfig) {
       const signal = exec?.signal
       const ghPath = verifyGh === false ? (await core.resolveGh(config)).path : await requireGh(config)
       if (!ghPath) throw new Error('gh CLI not found; set `ghPath` in this plugin\'s config.')
-      const names = profile ? [assertProfileName(profile)] : await core.listProfiles(config)
+      const names = profile ? [await resolveProfileArg(profile, config)] : await core.listProfiles(config)
       if (names.length === 0) return text('No profiles found; nothing to upload.')
 
       const lines = []
@@ -396,7 +443,7 @@ function buildTools(ctx, userConfig) {
       const signal = exec?.signal
       const ghPath = await requireGh(config)
       const state = await core.loadState(config)
-      const names = profile ? [assertProfileName(profile)] : await core.listProfiles(config)
+      const names = profile ? [await resolveProfileArg(profile, config)] : await core.listProfiles(config)
       const tracked = names.filter((n) => state.profiles?.[n]?.gistId)
       if (tracked.length === 0) {
         return text('Nothing to download: no profile has a gist yet. Run gist_upload first.')
@@ -447,7 +494,7 @@ function buildTools(ctx, userConfig) {
       const config = withConfig()
       const signal = exec?.signal
       const ghPath = await requireGh(config)
-      const names = profile ? [assertProfileName(profile)] : await core.listProfiles(config)
+      const names = profile ? [await resolveProfileArg(profile, config)] : await core.listProfiles(config)
       if (names.length === 0) return text('No profiles found; nothing to sync.')
 
       const lines = []

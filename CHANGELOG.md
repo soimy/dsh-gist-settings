@@ -31,7 +31,7 @@ The first release. Nothing has been tagged before it, so the whole history is he
 - **Bundle metadata** — `icon.svg` and `locale/{en,zh}.json` display metadata for Plugin Manager cards.
 - **Documentation** — English and Chinese READMEs, a contributing guide, and issue and pull-request
   templates.
-- **Test suite** — 111 offline cases across four suites plus 10 opt-in live cases against real
+- **Test suite** — 116 offline cases across four suites plus 10 opt-in live cases against real
   GitHub, including `test/fake-gh.mjs`, an in-memory stand-in for the `gh` CLI.
 
 ### Fixed
@@ -73,6 +73,11 @@ integration, mutation-testing and documentation audits). Each fix is pinned by a
   Harness itself displays — named a different tree rooted in the working directory.
 - `exec.signal` was ignored, so a cancelled call still completed its write.
 - `assertProfileName` accepted `node_modules`, which the framework reserves.
+- A profile name differing only in case from a tracked one — `ALPHA` for `alpha` — created a second
+  secret gist for the same directory, because Windows and macOS treat those as one path. Names are
+  now matched exactly: a case-only variant is refused with the real name attached, an unknown name is
+  refused with the list of known ones, and the write paths refuse to record a second entry differing
+  only in case, so a direct caller of the engine is protected too.
 
 [Unreleased]: https://github.com/soimy/dsh-gist-settings/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/soimy/dsh-gist-settings/releases/tag/v0.1.0

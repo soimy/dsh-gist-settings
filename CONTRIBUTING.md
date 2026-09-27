@@ -70,9 +70,9 @@ Knowing which suite covers what saves a lot of guessing.
 | Suite | Cases | Proves |
 |---|---|---|
 | `npm run test:sync` | 19 | The engine's whole lifecycle against an in-memory `gh`: create, upload, divergence, download, backup, pruning, recreation, idempotency. |
-| `npm run test:tools` | 18 | The tool layer: registration, argument validation, and that one failing profile never aborts the others. |
+| `npm run test:tools` | 21 | The tool layer: registration, argument validation, profile-name resolution, and that one failing profile never aborts the others. |
 | `npm run test:schema` | 49 | The hand-written definitions against the Harness's *own* validators — the registration contract, the supported JSON Schema subset, argument validation, and that each returned value satisfies its declared output schema. |
-| `npm run test:regression` | 25 | The specific defects an adversarial review found. Every case here fails if its fix is reverted. |
+| `npm run test:regression` | 27 | The specific defects an adversarial review found. Every case here fails if its fix is reverted. |
 | `npm run test:live` | 10 | The real GitHub round trip. Opt-in, and it deletes the gist it creates. |
 
 `test/schema.test.mjs` **fails** rather than skipping when it cannot find a DSH installation, because
@@ -214,9 +214,9 @@ plugin_manager  action: install_bundle  target: <此仓库的绝对路径>
 | 套件 | 用例数 | 证明的内容 |
 |---|---|---|
 | `npm run test:sync` | 19 | 引擎完整生命周期（内存版 gh）：创建、上传、分叉、下载、备份、清理、重建、幂等。 |
-| `npm run test:tools` | 18 | 工具层：注册、参数校验、单个 profile 失败不会中断其他。 |
+| `npm run test:tools` | 21 | 工具层：注册、参数校验、profile 名解析、单个 profile 失败不会中断其他。 |
 | `npm run test:schema` | 49 | 手写定义 vs Harness **自带**校验器：注册契约、受支持的 JSON Schema 子集、参数校验、返回值满足声明的输出 schema。 |
-| `npm run test:regression` | 25 | 对抗性审核发现的具体缺陷。**每一条在修复被回退时都会失败。** |
+| `npm run test:regression` | 27 | 对抗性审核发现的具体缺陷。**每一条在修复被回退时都会失败。** |
 | `npm run test:live` | 10 | 真实 GitHub 往返。需显式开启，且会删除自己创建的 gist。 |
 
 `test/schema.test.mjs` 找不到 DSH 安装时**会失败而不是跳过**——静默跳过会让 `npm test` 全绿但实际上一个校验都没跑。做无关改动时可设 `DSH_ALLOW_SCHEMA_SKIP=1`。

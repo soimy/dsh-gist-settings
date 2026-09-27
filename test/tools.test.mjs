@@ -183,6 +183,29 @@ await check('a non-object argument list is rejected', async () => {
   }
 })
 
+/* ---------------------------------------------- profile-name resolution gate -- */
+
+await check('a case-only variant of a real profile is refused with the real name', async () => {
+  // `ALPHA` and `alpha` are one directory on Windows and macOS; accepting both
+  // would mint two gists for it.
+  for (const variant of ['ALPHA', 'AlPhA']) {
+    await assert.rejects(() => call('gist_upload', { profile: variant }), /; "alpha" is/)
+    await assert.rejects(() => call('gist_status', { profile: variant }), /; "alpha" is/)
+  }
+})
+
+await check('the exact profile name still resolves', async () => {
+  const body = await call('gist_status', { profile: 'alpha' })
+  assert.match(body, /^alpha$/m)
+})
+
+await check('an unknown profile is refused with the list of known ones', async () => {
+  await assert.rejects(
+    () => call('gist_status', { profile: 'no-such-profile' }),
+    /unknown profile "no-such-profile"; known profiles: .*alpha/,
+  )
+})
+
 /* -------------------------------------------------- failure isolation, for real -- */
 
 await check('a genuinely failing profile does not abort the others', async () => {

@@ -14,7 +14,7 @@
 | 同步引擎（`lib/core.js`） | 已完成 |
 | Host 插件 + 4 个 agent 工具 | **已安装并生效**，可在会话中调用 |
 | 真实 GitHub 往返 | **已在真实账号上验证** |
-| 测试 | **111 项离线用例 + 10 项真实用例**，全部通过 |
+| 测试 | **116 项离线用例 + 10 项真实用例**，全部通过 |
 | Client 设置页 | 尚未开始 —— 见[设置页](#设置页) |
 | 许可证 | MIT |
 
@@ -80,6 +80,11 @@ plugin_manager  action: remove_bundle  target: @local/dsh-gist-settings
 四个工具都接受可选的 `profile` 参数；省略即对所有 profile 生效。**某个 profile 失败不会中断
 其他 profile。** 所有参数都会被类型校验 —— 类型错误或未知键名会直接报错，绝不静默转换，
 因此 `force: "false"` 不可能变成强制执行覆盖。
+
+**profile 名按原样精确匹配。** 当目录名是 `alpha` 时传入 `ALPHA` 会被拒绝 —— 因为在 Windows 和
+macOS 上它们是同一个目录，两者都接受就会把同一个 profile 备份成两个 gist，然后再悄无声息地
+互相分叉。报错信息会指出真实的名字。传入不存在的名字时，会连同现有 profile 列表一起拒绝，
+而不是等到后面抛出一句令人费解的"没有任何被追踪的文件"。
 
 ### 状态词表
 
@@ -166,13 +171,13 @@ cordis.patch.yml       bundle 补丁（插入插件行；并记录配置说明�
 client.js              Client 设置页（尚未编写）
 locale/{en,zh}.json    Plugin Manager 卡片用的展示元数据
 icon.svg               bundle 图标
-test/                  四套共 111 项离线用例，另有 10 项真实用例
+test/                  四套共 116 项离线用例，另有 10 项真实用例
 ```
 
 ## 开发
 
 ```bash
-npm test                # 四套离线用例（111 项）
+npm test                # 四套离线用例（116 项）
 npm run test:sync       # 用假 gh 跑引擎完整生命周期
 npm run test:tools      # 工具层、参数校验、故障隔离
 npm run test:schema     # 定义 vs. Harness 自带校验器
