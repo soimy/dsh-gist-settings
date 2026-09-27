@@ -16,7 +16,7 @@ guarded two-way sync are exposed as agent tools, so you can drive them from a co
 | Sync engine (`lib/core.js`) | Done |
 | Host plugin + agent tools | **Installed and live**; callable from a session |
 | Real GitHub round-trip | **Verified** against a real account |
-| Test suite | **147 offline cases across five suites, plus 11 live cases**, all passing |
+| Test suite | **158 offline cases across five suites, plus 11 live cases**, all passing |
 | Client settings page | Not started — see [The settings page](#the-settings-page) |
 | Licence | MIT |
 
@@ -207,7 +207,9 @@ then overwrite another profile's config — is refused. Safe nested names such a
 supported, including recreating a parent directory that was deleted. The check is repeated immediately
 before each write rather than once per operation, which narrows the window in which a directory could be
 swapped for a link mid-download to the rename call itself; closing it completely would need
-handle-relative operations that Node's `fs` does not expose.
+handle-relative operations that Node's `fs` does not expose. Note what that does and does not
+cover: a link that is live when it is checked is caught, and one that is dangling cannot be written
+through at all, but the check itself is still a check-then-use — the gap is narrowed, not closed.
 
 **One writer at a time, across processes.** Read-modify-write cycles over `state.json` are serialised
 by an in-process queue *and* by a lock file (`<stateDir>/state.lock`) naming the pid that owns it. Two
@@ -252,7 +254,7 @@ cordis.patch.yml       Bundle patch (inserts the plugin row; documents config)
 client.js              Client settings page (not yet written)
 locale/{en,zh}.json    Plugin display metadata for Plugin Manager cards
 icon.svg               Bundle icon
-test/                  147 offline cases across five suites, plus 11 live ones
+test/                  158 offline cases across five suites, plus 11 live ones
 scripts/               check-changelog.mjs — validates CHANGELOG.md
 .github/               Issue forms and the pull-request template
 ```
@@ -269,7 +271,7 @@ scripts/               check-changelog.mjs — validates CHANGELOG.md
 ## Development
 
 ```bash
-npm test                # the five offline suites (147 cases) plus the changelog check
+npm test                # the five offline suites (158 cases) plus the changelog check
 npm run test:sync       # engine lifecycle against a fake gh
 npm run test:tools      # tool layer, argument validation, failure isolation
 npm run test:schema     # definitions vs. the installed Harness validators
@@ -286,7 +288,8 @@ whole lifecycle — create, upload, download, divergence, backup, pruning, gist 
 recovery — runs offline with no GitHub account.
 
 `test/schema.test.mjs` locates the installed `@deepseek-ai/dsh-tools` from `process.execPath`
-(override with `DSH_TOOLS_DIR`) and replays the runtime's own checks: the registration contract, the
+(searched first when you set `DSH_TOOLS_DIR`) and replays the runtime's own checks: the registration
+contract, the
 supported JSON Schema subset, argument validation, and that each tool's returned value satisfies its
 declared output schema. **Finding no installation fails the suite** rather than skipping, because a
 silent skip would leave `npm test` green with none of those checks having run; set

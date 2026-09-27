@@ -74,7 +74,27 @@ in `test/live.test.mjs`. Every one of them fails if its fix is reverted.
   unreachable. Only tracked files have their content resolved now; pruning still sees every name.
 - **Two tracked names that fold to one file were accepted**, so both staged to a single path and the
   second rename always failed — the profile could never be downloaded. A set that folds under the
-  platform's rules is now refused, as a case-only profile-name variant already was.
+  platform's rules is now refused, as a case-only profile-name variant already was. The Unicode part of
+  that check applies only where the filesystem normalises: NTFS stores names verbatim, so there the two
+  spellings are two real files and refusing them would be a false refusal.
+- **Two tracked names that *denote* one file were still accepted.** Folding the name catches two
+  spellings, not two paths: a junction alias (`link/f.yml` where `link` points at `real`) or a Windows
+  8.3 short name made both entries write to one file, so the second silently discarded the first while
+  the result claimed both had been written. Write targets are now identified by file id, or by resolved
+  parent plus name when the file does not exist yet, and a collision is refused before anything is
+  staged.
+- **`profileFiles` accepted an ancestor and a descendant** (`a` and `a/b.yml`), which made staging try
+  to create `a` twice. A gist holding both names — from a hand edit, the web UI, or another layout —
+  could not be restored at all, and the error named an internal staging directory. Such a set is now
+  refused, and a profile is still configurable with names that merely share leading characters.
+- **The post-redirect host check was skipped whenever a response reported no final URL**, which is a
+  shape a response stub has by default. The final URL is now required: a response that cannot be shown
+  to have stayed on a GitHub host is refused.
+- **An aborted caller was treated as a transport failure** and retried through `gh`, so a cancelled
+  call started a second request and surfaced as "gh exited with code 1". An aborted signal now
+  propagates.
+- **A failed state write on the upload path** now distinguishes "the gist was updated" from "nothing
+  happened", the way the download path already did.
 - **A failed state write after a successful download reported a lost download** and left a temp file
   behind. The files are in place and the error says so, the temp file is removed with the failure, and
   a state write that fails after an upload says the gist exists rather than implying it does not.
@@ -89,7 +109,10 @@ in `test/live.test.mjs`. Every one of them fails if its fix is reverted.
 
 - `test/safety.test.mjs` — the guarantees the README makes: containment for the profile and for every
   tracked file, an all-or-nothing download, `force` doing what it says, recovery of a profile whose
-  directory is gone, one-sync convergence, and cross-process state locking.
+  directory is gone, one-sync convergence, and cross-process state locking. It also covers a download
+  into a two-level deleted tree, the directories a failed commit has to take back, a home directory
+  reached through a junction, a parameter set whose names collide on one file, and a state write that
+  fails after the files are already in place.
 - `test/regression.test.mjs` covers a gh that exits 0 while logged out, and four lookalike `raw_url`
   hosts where a loosened or decode-then-fetch check would have followed an attacker's URL.
 - The live suite now covers a file above the API's 1 MB truncation threshold.

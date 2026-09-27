@@ -227,13 +227,15 @@ await check('a tracked entry that IS the link out of the profile is refused', as
 
   await seed('filelink', { 'cordis.patch.yml': 'ok\n' })
   const esc = path.join(profileDir('filelink'), 'esc')
-  let tracked = 'package.json'
+  // `esc` is the tracked name in both branches: a symlink to a file, or a
+  // junction to a directory. Tracking a name that does not exist would resolve
+  // without throwing and the case would fail for the wrong reason.
+  const tracked = 'esc'
   try {
     await fs.symlink(outsideFile, esc, 'file')
   } catch {
     try {
       await run('cmd', ['/c', 'mklink', '/J', esc, outsideDir])
-      tracked = 'esc'
     } catch {
       return 'this environment allows neither a file symlink nor a junction'
     }
@@ -502,18 +504,49 @@ await check('a nested tracked file is restored into a parent directory that was 
 })
 
 await check('a tracked name that folds to another one is refused', async () => {
-  if (process.platform !== 'win32' && process.platform !== 'darwin') {
-    return 'this filesystem does not fold case'
-  }
   // Both entries would stage to a single path, so the second rename could never
   // succeed and the profile could never be downloaded at all.
+  if (process.platform === 'win32' || process.platform === 'darwin') {
+    assert.throws(
+      () => core.resolveProfileFiles({ profileFiles: ['a.txt', 'A.txt'] }),
+      /duplicate tracked file name/,
+    )
+    assert.throws(
+      () => core.resolveProfileFiles({ profileFiles: ['a\\b.txt', 'a/B.txt'] }),
+      /duplicate tracked file name/,
+    )
+  }
+
+  // The same name in its composed and decomposed Unicode spellings. macOS hands
+  // those out interchangeably, so they are one file there and must be refused;
+  // NTFS stores names verbatim, so there they are two real files and refusing
+  // them would be a false refusal.
+  const spellings = ['caf\u00e9.yml', 'cafe\u0301.yml']
+  if (process.platform === 'darwin') {
+    assert.throws(
+      () => core.resolveProfileFiles({ profileFiles: spellings }),
+      /duplicate tracked file name/,
+    )
+  } else {
+    assert.deepEqual(core.resolveProfileFiles({ profileFiles: spellings }), spellings)
+  }
+})
+
+await check('an ancestor and a descendant cannot both be tracked', async () => {
+  // Staging the file `a` and then `a/b.yml` would try to create `a` twice, and a
+  // gist holding both names could never be restored at all.
   assert.throws(
-    () => core.resolveProfileFiles({ profileFiles: ['a.txt', 'A.txt'] }),
-    /duplicate tracked file name/,
+    () => core.resolveProfileFiles({ profileFiles: ['a', 'a/b.yml'] }),
+    /conflicting tracked file names/,
   )
   assert.throws(
-    () => core.resolveProfileFiles({ profileFiles: ['a\\b.txt', 'a/B.txt'] }),
-    /duplicate tracked file name/,
+    () => core.resolveProfileFiles({ profileFiles: ['a/b.yml', 'a'] }),
+    /conflicting tracked file names/,
+  )
+  assert.deepEqual(
+    core.resolveProfileFiles({ profileFiles: ['a', 'ab/c.yml'] }),
+    ['a', 'ab/c.yml'],
+    'a shared prefix of characters is not a shared path segment',
   )
 })
 
@@ -735,6 +768,270 @@ await check('a directory swapped for a link mid-download cannot redirect the wri
     'no tracked file may be written outside the profile, however the download ended',
   )
   await fs.rm(path.join(dir, 'sub'), { recursive: true, force: true }).catch(() => {})
+
+  // Reported rather than passed off as coverage: if the swap never landed, or the
+  // junction could not be created, this run proved nothing.
+  if (!swapped) return 'the swap did not land on this run, so nothing was exercised'
+})
+
+/* ------------------------------------------------- deeper trees and tidy-ups -- */
+
+await check('a two-level nested tracked file is restored into a deleted tree', async () => {
+  await seed('deep', { 'a/b/c.yml': 'deep: v1\n' })
+  const deep = { ...config, profileFiles: ['a/b/c.yml'] }
+  const uploaded = await core.uploadProfile('deep', { ghPath, config: deep })
+  await core.gistPatch(ghPath, uploaded.gistId, { files: { 'a/b/c.yml': 'deep: v2\n' } })
+  await fs.rm(path.join(profileDir('deep'), 'a'), { recursive: true })
+
+  // Two missing components, so the directories have to be created shallowest
+  // first. Every other nested fixture here is one level deep and cannot tell.
+  const result = await core.downloadProfile('deep', { ghPath, config: deep, force: true })
+  assert.deepEqual(result.written, ['a/b/c.yml'])
+  assert.equal(await read('deep', 'a/b/c.yml'), 'deep: v2\n')
+  assert.deepEqual((await fs.readdir(profileDir('deep'))).sort(), ['a'])
+  assert.equal((await core.profileStatus('deep', { ghPath, config: deep })).status, 'in-sync')
+})
+
+await check('a failed commit takes back the directories it created', async () => {
+  await seed('tidydirs', { 'new/x.yml': 'X1\n', 'blocked/y.yml': 'Y1\n' })
+  const tidy = { ...config, profileFiles: ['new/x.yml', 'blocked/y.yml'] }
+  const uploaded = await core.uploadProfile('tidydirs', { ghPath, config: tidy })
+  await core.gistPatch(ghPath, uploaded.gistId, {
+    files: { 'new/x.yml': 'X2\n', 'blocked/y.yml': 'Y2\n' },
+  })
+
+  // `new/` is gone, so the commit has to create it; `blocked` is a regular file,
+  // so the second rename must fail after the first one succeeded.
+  const dir = profileDir('tidydirs')
+  await fs.rm(path.join(dir, 'new'), { recursive: true })
+  await fs.rm(path.join(dir, 'blocked'), { recursive: true })
+  await fs.writeFile(path.join(dir, 'blocked'), 'not a directory\n', 'utf8')
+
+  await assert.rejects(
+    () => core.downloadProfile('tidydirs', { ghPath, config: tidy, force: true }),
+    /were put back exactly as they were/,
+  )
+  assert.deepEqual(
+    (await fs.readdir(dir)).sort(),
+    ['blocked'],
+    'the directory the commit created must be taken back, not left behind',
+  )
+})
+
+await check('a profile is still resolved when its whole profiles directory is gone', async () => {
+  const home = path.join(root, 'vanished-home')
+  const homeConfig = { dshHome: home, ghPath: fakeGh }
+  await fs.mkdir(path.join(home, 'profiles', 'ghost'), { recursive: true })
+  await fs.writeFile(path.join(home, 'profiles', 'ghost', 'cordis.patch.yml'), 'ghost: 1\n', 'utf8')
+  await core.uploadProfile('ghost', { ghPath, config: homeConfig })
+
+  // Two missing components above the profile, so the resolved tail has to be
+  // reassembled in the right order rather than reversed.
+  await fs.rm(path.join(home, 'profiles'), { recursive: true, force: true })
+
+  assert.equal((await core.profileStatus('ghost', { ghPath, config: homeConfig })).status, 'missing-local')
+  assert.equal((await core.syncProfile('ghost', { ghPath, config: homeConfig })).action, 'downloaded')
+  assert.equal(
+    await fs.readFile(path.join(home, 'profiles', 'ghost', 'cordis.patch.yml'), 'utf8'),
+    'ghost: 1\n',
+  )
+})
+
+await check('two tracked names that resolve to one file are refused', async () => {
+  if (process.platform !== 'win32') return 'junctions are a Windows-only construct'
+  await seed('aliased', { 'real/f.yml': 'AAAA\n' })
+  const link = path.join(profileDir('aliased'), 'link')
+  try {
+    await run('cmd', ['/c', 'mklink', '/J', link, path.join(profileDir('aliased'), 'real')])
+  } catch {
+    return 'this environment does not allow creating a junction'
+  }
+
+  // Different names, one file. Both would stage, both would rename, and the second
+  // would silently undo the first while the report claimed both were written.
+  const aliased = { ...config, profileFiles: ['link/f.yml', 'real/f.yml'] }
+  const uploaded = await core.uploadProfile('aliased', { ghPath, config: aliased })
+  await core.gistPatch(ghPath, uploaded.gistId, {
+    files: { 'link/f.yml': 'BBBB\n', 'real/f.yml': 'BBBB\n' },
+  })
+
+  await assert.rejects(
+    () => core.downloadProfile('aliased', { ghPath, config: aliased, force: true }),
+    /resolve to the same file/,
+  )
+  assert.equal(await read('aliased', 'real/f.yml'), 'AAAA\n', 'and nothing may be written')
+})
+
+await check('pruning still sees an untracked file whose content was never fetched', async () => {
+  process.env.FAKE_GH_TRUNCATE = 'notes.txt'
+  process.env.FAKE_GH_RAW_BASE = 'https://elsewhere.example/collect'
+  try {
+    const narrow = { ...config, profileFiles: ['cordis.patch.yml'] }
+    const pruned = await core.uploadProfile('extra', { ghPath, config: narrow })
+    assert.deepEqual(pruned.pruned, ['notes.txt'], 'pruning decides on names, so it must still see the file')
+    assert.deepEqual((await core.gistGet(ghPath, pruned.gistId)).fileNames, ['cordis.patch.yml'])
+  } finally {
+    delete process.env.FAKE_GH_TRUNCATE
+    delete process.env.FAKE_GH_RAW_BASE
+  }
+})
+
+await check('a raw response that does not report its final URL is refused', async () => {
+  const state = await core.loadState(config)
+  process.env.FAKE_GH_TRUNCATE = 'cordis.patch.yml'
+  try {
+    await assert.rejects(
+      () =>
+        core.gistGet(ghPath, state.profiles.extra.gistId, {
+          only: ['cordis.patch.yml'],
+          fetchImpl: async () => ({ ok: true, status: 200, statusText: 'OK', text: async () => 'x' }),
+        }),
+      /did not report its final URL/,
+      'a response that cannot be shown to have stayed on GitHub must not be trusted',
+    )
+  } finally {
+    delete process.env.FAKE_GH_TRUNCATE
+  }
+})
+
+/* ------------------------------------------------------------ raw transfer -- */
+
+await check('a raw response that redirected off the trusted host is refused', async () => {
+  const state = await core.loadState(config)
+  const gistId = state.profiles.extra.gistId
+  process.env.FAKE_GH_TRUNCATE = 'cordis.patch.yml'
+  try {
+    await assert.rejects(
+      () =>
+        core.gistGet(ghPath, gistId, {
+          only: ['cordis.patch.yml'],
+          fetchImpl: async () => ({
+            ok: true,
+            status: 200,
+            statusText: 'OK',
+            url: 'https://evil.example/collected',
+            text: async () => 'attacker body',
+          }),
+        }),
+      /not a trusted GitHub URL/,
+      'the final URL has to be checked, not just the one that was requested',
+    )
+  } finally {
+    delete process.env.FAKE_GH_TRUNCATE
+  }
+})
+
+await check('raw content is fetched under its own deadline and read as a stream', async () => {
+  const state = await core.loadState(config)
+  const gistId = state.profiles.extra.gistId
+  process.env.FAKE_GH_TRUNCATE = 'cordis.patch.yml'
+  try {
+    let seen = null
+    const gist = await core.gistGet(ghPath, gistId, {
+      only: ['cordis.patch.yml'],
+      fetchImpl: async (url, options) => {
+        seen = options
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          url,
+          // A streamed body is the only shape the size cap can act on, and a
+          // response with no `text()` at all is the only shape that proves the
+          // streaming path is the one being taken.
+          body: (async function* streamed() {
+            yield Buffer.from('extra: ')
+            yield Buffer.from('1\n')
+          })(),
+        }
+      },
+    })
+    assert.equal(gist.files['cordis.patch.yml'], 'extra: 1\n', 'a streamed body must be assembled in order')
+    assert.ok(seen.signal instanceof AbortSignal, 'the request must carry a deadline of its own')
+    assert.equal(seen.redirect, 'follow')
+  } finally {
+    delete process.env.FAKE_GH_TRUNCATE
+  }
+})
+
+await check('a raw request that fails at the transport falls back, and reports a failing fallback', async () => {
+  const state = await core.loadState(config)
+  const gistId = state.profiles.extra.gistId
+  process.env.FAKE_GH_TRUNCATE = 'cordis.patch.yml'
+  process.env.FAKE_GH_FAIL_RAW = '1'
+  try {
+    await assert.rejects(
+      () =>
+        core.gistGet(ghPath, gistId, {
+          only: ['cordis.patch.yml'],
+          fetchImpl: async () => {
+            throw new TypeError('fetch failed')
+          },
+        }),
+      /HTTP 502/,
+      'a fallback that also fails must surface its own failure, not an empty file',
+    )
+  } finally {
+    delete process.env.FAKE_GH_TRUNCATE
+    delete process.env.FAKE_GH_FAIL_RAW
+  }
+})
+
+/* --------------------------------------------------------- state write failure -- */
+
+await check('a download whose baseline cannot be recorded says the files are in place', async () => {
+  await seed('unrecorded', { 'cordis.patch.yml': 's: v1\n' })
+  const solo = { ...config, profileFiles: ['cordis.patch.yml'] }
+  const uploaded = await core.uploadProfile('unrecorded', { ghPath, config: solo })
+  await core.gistPatch(ghPath, uploaded.gistId, { files: { 'cordis.patch.yml': 's: v2\n' } })
+
+  // Make the state write fail while leaving it readable: on Windows by marking
+  // the file read-only, elsewhere by removing write permission from its directory.
+  const stateFile = path.join(stateDir, 'state.json')
+  const blockWrites = async () => {
+    if (process.platform === 'win32') await fs.chmod(stateFile, 0o444)
+    else await fs.chmod(stateDir, 0o555)
+  }
+  const allowWrites = async () => {
+    if (process.platform === 'win32') await fs.chmod(stateFile, 0o666)
+    else await fs.chmod(stateDir, 0o755)
+  }
+
+  await blockWrites()
+  try {
+    await assert.rejects(
+      () => core.downloadProfile('unrecorded', { ghPath, config: solo, force: true }),
+      /files are in place/,
+      'a failure after the commit must not be reported as a lost download',
+    )
+  } finally {
+    await allowWrites()
+  }
+
+  assert.equal(await read('unrecorded', 'cordis.patch.yml'), 's: v2\n', 'the download itself succeeded')
+  assert.deepEqual(
+    (await fs.readdir(stateDir)).filter((name) => name.endsWith('.tmp')),
+    [],
+    'a half-written temp file must not be left behind',
+  )
+
+  // The same for the upload direction: the gist really was updated, so the report
+  // has to say that rather than implying it was not.
+  await fs.writeFile(path.join(profileDir('unrecorded'), 'cordis.patch.yml'), 's: v3\n', 'utf8')
+  await blockWrites()
+  try {
+    await assert.rejects(
+      () => core.uploadProfile('unrecorded', { ghPath, config: solo }),
+      /recording it in .* failed/,
+    )
+  } finally {
+    await allowWrites()
+  }
+  assert.equal((await core.gistGet(ghPath, uploaded.gistId)).files['cordis.patch.yml'], 's: v3\n')
+  assert.deepEqual(
+    (await fs.readdir(stateDir)).filter((name) => name.endsWith('.tmp')),
+    [],
+  )
 })
 
 /* ----------------------------------------------------------------- summary -- */

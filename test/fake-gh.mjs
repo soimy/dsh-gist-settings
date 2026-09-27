@@ -14,6 +14,8 @@
  *                          with a `raw_url`, as real GitHub does for large files
  *   FAKE_GH_RAW_BASE       origin used to build those `raw_url` values, so a test
  *                          can present one the plugin must refuse to follow
+ *   FAKE_GH_FAIL_RAW       "1" to make a raw content request fail, which is what a
+ *                          proxy-only machine looks like to the direct fetch
  *   FAKE_GH_FAIL_GET       comma-separated gist ids whose GET fails with HTTP 500
  *   FAKE_GH_FAIL_GET_ALL   "1" to fail every gist GET
  *   FAKE_GH_UNAUTHENTICATED "1" to make `auth status` report a logged-out CLI
@@ -112,6 +114,7 @@ function project(gist) {
  * have answered, and keeps the double faithful to the real CLI.
  */
 function serveRaw(url) {
+  if (process.env.FAKE_GH_FAIL_RAW === '1') fail(`fake gh: HTTP 502: Bad Gateway (${url})`)
   const parsed = new URL(url)
   const parts = parsed.pathname.split('/').filter(Boolean)
   const rawIndex = parts.indexOf('raw')

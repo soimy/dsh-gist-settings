@@ -14,7 +14,7 @@
 | 同步引擎（`lib/core.js`） | 已完成 |
 | Host 插件 + 4 个 agent 工具 | **已安装并生效**，可在会话中调用 |
 | 真实 GitHub 往返 | **已在真实账号上验证** |
-| 测试 | **五套共 147 项离线用例，另有 11 项真实用例**，全部通过 |
+| 测试 | **五套共 158 项离线用例，另有 11 项真实用例**，全部通过 |
 | Client 设置页 | 尚未开始 —— 见[设置页](#设置页) |
 | 许可证 | MIT |
 
@@ -177,7 +177,8 @@ profile 被追踪的文件复制到 `<stateDir>/backups/<profile>/<时间戳>/`�
 的 gist 发布并覆盖另一个 profile 的配置），都会被拒绝。`config/app.yml` 这类安全的嵌套名字依然受
 支持，包括重建被删掉的父目录。路径检查在**每次写入之前**重做，而不是每次操作只做一次，这把"下载
 途中把某个目录换成链接"的窗口压缩到 rename 调用本身；要彻底关掉它，需要 Node 的 `fs` 并不提供的
-句柄相对操作。
+句柄相对操作。这里要说清楚它覆盖到什么程度：检查时**仍然存在**的链接会被拦住，而**悬空**的链接
+根本无法被写入穿过，但这个检查本身仍是"先检查再使用"——窗口被收窄了，并没有被关死。
 
 **删除操作绝不传播，两个方向都是。** 手工从 gist 上删掉一个受追踪文件，不会把它从本地删掉：下载会
 保留它，而且 `gist_sync` 会在**同一次调用**里把它放回 gist，因此一次同步就能到达稳定状态，而不会在
@@ -223,7 +224,7 @@ cordis.patch.yml       bundle 补丁（插入插件行；并记录配置说明�
 client.js              Client 设置页（尚未编写）
 locale/{en,zh}.json    Plugin Manager 卡片用的展示元数据
 icon.svg               bundle 图标
-test/                  五套共 147 项离线用例，另有 11 项真实用例
+test/                  五套共 158 项离线用例，另有 11 项真实用例
 scripts/               check-changelog.mjs —— 校验 CHANGELOG.md
 .github/               Issue 表单与 PR 模板
 ```
@@ -240,7 +241,7 @@ scripts/               check-changelog.mjs —— 校验 CHANGELOG.md
 ## 开发
 
 ```bash
-npm test                # 五套离线用例（147 项）
+npm test                # 五套离线用例（158 项）
 npm run test:sync       # 用假 gh 跑引擎完整生命周期
 npm run test:tools      # 工具层、参数校验、故障隔离
 npm run test:schema     # 定义 vs. Harness 自带校验器
@@ -256,7 +257,7 @@ npm run test:live       # 需显式开启：真实 GitHub
 重建、幂等、恢复 —— 都能在无网络、无 GitHub 账号的情况下跑完。
 
 `test/schema.test.mjs` 会从 `process.execPath` 定位已安装的 `@deepseek-ai/dsh-tools`
-（可用 `DSH_TOOLS_DIR` 覆盖），并重放运行时的检查：注册契约、受支持的 JSON Schema 子集、
+（设置了 `DSH_TOOLS_DIR` 时会优先搜索它），并重放运行时的检查：注册契约、受支持的 JSON Schema 子集、
 参数校验，以及每个工具的返回值是否满足它声明的输出 schema。**找不到安装时它会失败而不是跳过** ——
 静默跳过会让 `npm test` 全绿但一个校验都没跑；想刻意接受跳过可设 `DSH_ALLOW_SCHEMA_SKIP=1`。
 

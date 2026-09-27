@@ -239,7 +239,15 @@ await check('a truncated gist file is fetched whole from the raw_url the API nam
   // double agrees with itself.
   const fetchImpl = async (url, options) => {
     calls.push({ url, options })
-    return { ok: true, status: 200, statusText: 'OK', text: async () => 'abcdefghijklmnopqrstuvwxyz\n' }
+    // `url` is part of the contract: the final URL is checked, so a response that
+    // does not report one is refused rather than trusted.
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      url,
+      text: async () => 'abcdefghijklmnopqrstuvwxyz\n',
+    }
   }
 
   const gist = await core.gistGet(ghPath, gistId, { fetchImpl })
