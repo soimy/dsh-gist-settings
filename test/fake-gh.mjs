@@ -17,6 +17,8 @@
  *   FAKE_GH_FAIL_GET       comma-separated gist ids whose GET fails with HTTP 500
  *   FAKE_GH_FAIL_GET_ALL   "1" to fail every gist GET
  *   FAKE_GH_UNAUTHENTICATED "1" to make `auth status` report a logged-out CLI
+ *   FAKE_GH_LOGGED_OUT_OK "1" to report a logged-out CLI while still exiting 0,
+ *                          which is what a real gh does when no host is configured
  *   FAKE_GH_FAIL_CREATE    "1" to fail every POST /gists
  */
 
@@ -115,7 +117,8 @@ function serveRaw(url) {
   const rawIndex = parts.indexOf('raw')
   if (rawIndex < 1 || rawIndex + 1 >= parts.length) fail(`fake gh: unrecognised raw URL ${url}`)
   const id = parts[rawIndex - 1]
-  const name = parts[rawIndex + 1]
+  // Everything after `/raw/` is the file name, which may itself contain slashes.
+  const name = parts.slice(rawIndex + 1).join('/')
   const gist = load().gists[id]
   if (!gist || !(name in gist.files)) fail(`fake gh: HTTP 404: Not Found (${url})`)
   out(gist.files[name])
@@ -132,6 +135,12 @@ if (argv[0] === '--version') {
 if (argv[0] === 'auth' && argv[1] === 'status') {
   if (process.env.FAKE_GH_UNAUTHENTICATED === '1') {
     fail('You are not logged into any GitHub hosts. To log in, run: gh auth login')
+  }
+  if (process.env.FAKE_GH_LOGGED_OUT_OK === '1') {
+    // A real `gh auth status` with no host configured says this and still exits 0,
+    // so a caller that only checks the exit code reads a logged-out CLI as ready.
+    out('You are not logged into any GitHub hosts. To log in, run: gh auth login')
+    process.exit(0)
   }
   out('github.com\n  ✓ Logged in to github.com account testuser (keyring)\n  - Active account: true')
   process.exit(0)

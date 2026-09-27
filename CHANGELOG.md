@@ -11,8 +11,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 Defects found by a re-review of the fixes below
-([issue #1](https://github.com/soimy/dsh-gist-settings/issues/1)). Each one is pinned by a case in
-`test/safety.test.mjs` that fails if the fix is reverted.
+([issue #1](https://github.com/soimy/dsh-gist-settings/issues/1)), and then by a second adversarial
+pass over those fixes themselves. Most are pinned by `test/safety.test.mjs`; the truncated-content
+cases live in `test/regression.test.mjs`, and the ones that can only be settled against real GitHub are
+in `test/live.test.mjs`. Every one of them fails if its fix is reverted.
 
 ### Fixed
 
@@ -21,7 +23,26 @@ Defects found by a re-review of the fixes below
   `../../some-secret-file` — or a tracked file that was itself a link out of the tree, or that sat
   under a linked subdirectory — was read and published by an upload and overwritten by a download.
   Every name is now validated as a plain relative path, and every segment of its resolved path is
-  checked against the profile root. Nested names such as `config/app.yml` are still supported.
+  checked. Nested names such as `config/app.yml` are still supported.
+- **Containment held at the wrong boundary.** A tracked file was checked against the profiles
+  directory rather than the profile's own, so a junction pointing at a *sibling* profile let one
+  profile's gist publish another profile's config and then overwrite it, breaking the
+  one-gist-per-profile invariant. The boundary is now the profile directory, and the check is repeated
+  immediately before each write instead of once per operation.
+- **A download could write a nested file under its parent's name.** Resolving a path whose parent
+  directory did not exist returned the shortened path, so restoring `config/app.yml` into a profile
+  without `config/` wrote the content into a *file* named `config`, reported success, and left the
+  profile unable to converge. The full path is returned, and a missing parent directory is created
+  immediately before the rename and taken back if the commit fails.
+- **A path could be swapped for a link between the check and the write.** Targets were resolved once,
+  then written after a staging phase whose length is proportional to the payload; a directory replaced
+  by a junction in that window redirected the write out of the tree. Each target is re-resolved
+  immediately before its rename, and the rollback re-resolves too, so a restore cannot be redirected
+  either.
+- **A symlinked profiles directory disabled disaster recovery.** When `~/.dsh` is a junction to another
+  drive, a deleted profile directory resolved to a lexical path that looked like an escape, so
+  status, sync and download all refused. The nearest existing ancestor is now resolved and the missing
+  tail appended.
 - **A failed download could leave the profile at a revision that existed nowhere.** Files were written
   one at a time, so a failure after the first left a mixture of old and new content. Content is now
   staged inside the profile directory and measured before anything tracked is touched, then renamed
@@ -32,18 +53,33 @@ Defects found by a re-review of the fixes below
 - **A profile whose directory had been deleted outright was invisible** to bulk status, download and
   sync, because the candidate list came from the directory listing alone — which is precisely the
   disaster-recovery case those operations exist for. Bulk operations now also consider the profiles the
-  state file still tracks.
-- **One `gist_sync` did not converge after a remote deletion.** A tracked file deleted from the gist
-  is still never deleted locally, but sync now puts the local copy back into the gist in the same call
-  instead of leaving the profile reporting local changes until a second one.
+  state file still tracks, and `gist_upload`, which cannot upload a directory that is gone, names such
+  a profile in its result instead of dropping it silently.
+- **One `gist_sync` did not converge after a remote deletion.** A tracked file deleted from the gist is
+  still never deleted locally, but sync now puts the local copy back into the gist in the same call.
+  A gist that lost *every* tracked file is republished rather than reported as unreadable, and
+  `force` now reaches the restore that the refusal message tells the caller to re-run with.
 - **The state lock was process-local**, so two Harness hosts sharing a `stateDir` could each drop the
   other's record — untracking a profile and orphaning its gist — or mint two gists for one profile. A
-  lock file now names the owning pid, a lock whose owner has exited is reclaimed at once, and a nested
-  call is refused with a clear error rather than deadlocking.
+  lock file now names the owning pid; a lock whose owner has exited is reclaimed at once; a lock
+  written by another machine is judged by age and kept fresh by a heartbeat; and releasing a lock
+  removes it only if it is still the one this process took.
 - **Truncated gist content was fetched with `gh api <raw_url>`.** That command is documented as taking
   an API endpoint, and it would carry the caller's token to a host gh was never configured for. The
-  URL is fetched directly now, and the live suite round-trips a 1.5 MB file to prove the path against
-  real GitHub.
+  URL is now fetched directly, after the host check and again after any redirect, with a timeout and a
+  size cap — and a *transport* failure falls back to the request gh would have made, because Node's
+  `fetch` does not honour `HTTP(S)_PROXY` or the platform certificate store the way gh does.
+- **Truncation was resolved for every file in the gist**, so a large file the user never tracks could
+  cost a request on every status call, and a failed fetch for it made the whole profile look
+  unreachable. Only tracked files have their content resolved now; pruning still sees every name.
+- **Two tracked names that fold to one file were accepted**, so both staged to a single path and the
+  second rename always failed — the profile could never be downloaded. A set that folds under the
+  platform's rules is now refused, as a case-only profile-name variant already was.
+- **A failed state write after a successful download reported a lost download** and left a temp file
+  behind. The files are in place and the error says so, the temp file is removed with the failure, and
+  a state write that fails after an upload says the gist exists rather than implying it does not.
+- **`gist_status` advised `gh auth login` when `gh` was not installed**, because a missing `gh` left no
+  auth state to report. It now says auth was not checked.
 - `backupProfile` did not create intermediate directories, so a nested tracked file made the backup
   fail and took the whole download with it.
 - A tracked file whose parent was a regular file surfaced a bare `ENOTDIR` instead of being reported
@@ -51,8 +87,11 @@ Defects found by a re-review of the fixes below
 
 ### Added
 
-- `test/safety.test.mjs` — the guarantees the README makes, one case per finding above, plus the
-  cross-process lock.
+- `test/safety.test.mjs` — the guarantees the README makes: containment for the profile and for every
+  tracked file, an all-or-nothing download, `force` doing what it says, recovery of a profile whose
+  directory is gone, one-sync convergence, and cross-process state locking.
+- `test/regression.test.mjs` covers a gh that exits 0 while logged out, and four lookalike `raw_url`
+  hosts where a loosened or decode-then-fetch check would have followed an attacker's URL.
 - The live suite now covers a file above the API's 1 MB truncation threshold.
 
 ## [0.1.0] - 2026-09-27

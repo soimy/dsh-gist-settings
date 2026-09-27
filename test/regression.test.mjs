@@ -45,6 +45,7 @@ const freshEnv = () => {
   delete process.env.FAKE_GH_FAIL_GET
   delete process.env.FAKE_GH_FAIL_GET_ALL
   delete process.env.FAKE_GH_UNAUTHENTICATED
+  delete process.env.FAKE_GH_LOGGED_OUT_OK
 }
 
 /* ------------------------------------------------------------- mini runner -- */
@@ -97,6 +98,16 @@ await check('checkAuth reports a logged-out CLI as unauthenticated', async () =>
   process.env.FAKE_GH_UNAUTHENTICATED = '1'
   const auth = await core.checkAuth(ghPath)
   assert.equal(auth.authenticated, false)
+})
+
+await check('a gh that exits 0 while logged out is still unauthenticated', async () => {
+  // A real `gh auth status` says "You are not logged into any GitHub hosts" and
+  // exits 0 when no host is configured. Reading the exit code alone would call
+  // that ready, and every later call would fail with an authentication error.
+  process.env.FAKE_GH_LOGGED_OUT_OK = '1'
+  const auth = await core.checkAuth(ghPath)
+  assert.equal(auth.authenticated, false, 'the message has to be read, not just the exit code')
+  assert.match(auth.output, /not logged into any GitHub hosts/)
 })
 
 await check('an unreachable gist is not reported as deleted', async () => {
@@ -243,22 +254,35 @@ await check('a truncated gist file is fetched whole from the raw_url the API nam
   assert.equal(calls[0].options.redirect, 'follow')
 })
 
-await check('a truncated file whose raw_url points elsewhere is refused unfetched', async () => {
+await check('a raw_url on a lookalike host is refused unfetched', async () => {
   process.env.FAKE_GH_TRUNCATE = 'cordis.patch.yml'
-  process.env.FAKE_GH_RAW_BASE = 'https://evil.example/collect'
   const state = await core.loadState(config)
-  let fetched = 0
-  await assert.rejects(
-    () =>
-      core.gistGet(ghPath, state.profiles.epsilon.gistId, {
-        fetchImpl: async () => {
-          fetched += 1
-          return { ok: true, status: 200, statusText: 'OK', text: async () => 'leaked' }
-        },
-      }),
-    /not a trusted GitHub URL/,
-  )
-  assert.equal(fetched, 0, 'an untrusted URL must not be requested at all')
+  // The first is obviously foreign, and every variant of the check rejects it —
+  // which is why it cannot be the only case. The rest are the ones a loosened
+  // suffix test, or a check that validates a decoded string while handing the raw
+  // one to fetch, would let through.
+  const hosts = [
+    'https://evil.example/collect',
+    'https://evilgithubusercontent.com/collect',
+    'https://githubusercontent.com.evil.example/collect',
+    'https://gist.githubusercontent.com%2F@evil.example/collect',
+  ]
+  for (const host of hosts) {
+    process.env.FAKE_GH_RAW_BASE = host
+    let fetched = 0
+    await assert.rejects(
+      () =>
+        core.gistGet(ghPath, state.profiles.epsilon.gistId, {
+          fetchImpl: async () => {
+            fetched += 1
+            return { ok: true, status: 200, statusText: 'OK', text: async () => 'leaked' }
+          },
+        }),
+      /not a trusted GitHub URL/,
+      `${host} must not be followed`,
+    )
+    assert.equal(fetched, 0, `${host} must not be requested at all`)
+  }
 })
 
 await check('a raw_url answering with an error status is reported, not silently truncated', async () => {
