@@ -1,0 +1,4 @@
+{
+  "title": "Gist 配置同步",
+  "description": "借助本地 gh 命令，把 DeepSeek Harness 各 profile 的配置同步（上传/下载/更新）到 GitHub Gist。"
+}

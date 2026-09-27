@@ -1,0 +1,18 @@
+# dependencies
+node_modules/
+pnpm-lock.yaml
+
+# local runtime state (never commit: holds gist ids and local backup manifests)
+.gist-settings/
+*.local.json
+backups/
+
+# editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# logs
+*.log
+npm-debug.log*

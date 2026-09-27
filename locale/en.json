@@ -1,0 +1,4 @@
+{
+  "title": "Gist Settings Sync",
+  "description": "Back up and restore DeepSeek Harness profile configuration through GitHub Gists, powered by the local gh CLI."
+}
