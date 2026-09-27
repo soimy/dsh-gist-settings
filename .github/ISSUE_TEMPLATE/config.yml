@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Setup, configuration and the safety model
+    url: https://github.com/soimy/dsh-gist-settings/blob/main/README.md
+    about: Installation, every config key, the status vocabulary and what upload may delete are all documented here.
+  - name: Contributing guide
+    url: https://github.com/soimy/dsh-gist-settings/blob/main/CONTRIBUTING.md
+    about: How to run the suites, what a good report contains, and how the changelog works.

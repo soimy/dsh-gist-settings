@@ -1,5 +1,7 @@
 # dsh-gist-settings
 
+**English** · [中文](README.zh-CN.md)
+
 A [DeepSeek Harness](https://github.com/deepseek-ai) Cordis plugin that backs up and restores your
 Harness **profile configuration** to **GitHub Gists**, using the `gh` CLI you already have installed
 and authenticated.
@@ -16,12 +18,15 @@ guarded two-way sync are exposed as agent tools, so you can drive them from a co
 | Real GitHub round-trip | **Verified** against a real account |
 | Test suite | **111 offline cases + 10 live cases**, all passing |
 | Client settings page | Not started — see [The settings page](#the-settings-page) |
-| Licence | **None yet** — see [Licence](#licence) |
+| Licence | MIT |
 
 This code has been through an adversarial review (independent security, correctness, integration,
 mutation-testing and documentation audits). Everything they proved is fixed and pinned by a
 regression test; the [safety model](#the-safety-model) below describes the resulting behaviour
 rather than the original intent.
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the issue, pull-request and
+changelog conventions, and [CHANGELOG.md](CHANGELOG.md) for what has changed.
 
 ## Requirements
 
@@ -179,16 +184,28 @@ client.js              Client settings page (not yet written)
 locale/{en,zh}.json    Plugin display metadata for Plugin Manager cards
 icon.svg               Bundle icon
 test/                  111 offline cases across four suites, plus 10 live ones
+scripts/               check-changelog.mjs — validates CHANGELOG.md
+.github/               Issue forms and the pull-request template
 ```
+
+## Documentation
+
+| Document | What it covers |
+|---|---|
+| [README.zh-CN.md](README.zh-CN.md) | This README in Chinese. The two are kept in sync; a behaviour change that updates only one is incomplete. |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Reporting, development setup, what each test suite proves, and the changelog, commit and release conventions. |
+| [CHANGELOG.md](CHANGELOG.md) | Every notable change, newest first, in [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) form. |
+| [LICENSE](LICENSE) | MIT. |
 
 ## Development
 
 ```bash
-npm test                # the four offline suites (111 cases)
+npm test                # the four offline suites (111 cases) plus the changelog check
 npm run test:sync       # engine lifecycle against a fake gh
 npm run test:tools      # tool layer, argument validation, failure isolation
 npm run test:schema     # definitions vs. the installed Harness validators
 npm run test:regression # the defects the adversarial review found
+npm run changelog:check # CHANGELOG.md structure and version consistency
 npm run test:live       # opt-in: real GitHub
 ```
 
@@ -241,11 +258,10 @@ dialog), showing the same table as `gist_status` with buttons wired to the four 
 
 ## Licence
 
-**There is no licence file.** On a public repository that means all rights reserved: nobody may
-reuse, modify or distribute this code, whatever GitHub's interface implies. If you want it usable,
-add a `LICENSE` file and a matching `"license"` field in `package.json` — note that `package.json`
-currently also sets `"private": true`, which is correct for a package that is never published to npm
-but is worth revisiting alongside the licence.
+[MIT](LICENSE) © 2026 Shen Yiming.
+
+`package.json` sets `"private": true` on purpose: it means the package is never published to npm and
+exists only to be installed as a local bundle. That is orthogonal to the licence.
 
 ## Review history
 

@@ -1,0 +1,69 @@
+name: Feature request
+description: Suggest a capability, a config knob, or a change in behaviour.
+title: '[Feature]: '
+labels: ['enhancement', 'needs-triage']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This plugin deliberately does a small number of things and prefers refusing over guessing.
+        Requests that keep that property are much easier to accept. See the safety model in the
+        [README](https://github.com/soimy/dsh-gist-settings#the-safety-model).
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do that you cannot?
+      description: Describe the situation, not the solution. What does your workflow look like today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like it to do?
+      description: If it changes an existing behaviour, say what should happen to the current one.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What have you tried instead?
+      description: Other tools, manual steps, a config change. This is often the most useful part.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part does this touch?
+      options:
+        - The tools (gist_status / upload / download / sync)
+        - Which files are tracked, or where they live
+        - The gist layout or naming
+        - Safety behaviour (pruning, divergence, backups)
+        - Configuration
+        - The (unwritten) settings page
+        - Documentation
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: dataloss
+    attributes:
+      label: Could this lose data, and how would a user recover?
+      description: |
+        Anything that deletes or overwrites needs an answer here. State whether a backup is taken
+        first, and whether the operation can be undone.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Confirmation
+      options:
+        - label: I searched the existing issues and the README for this.
+          required: true

@@ -1,0 +1,110 @@
+name: Bug report
+description: Something behaved differently from what the documentation says.
+title: '[Bug]: '
+labels: ['bug', 'needs-triage']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### Before you paste anything
+
+        **A secret gist URL is a bearer read capability** — anyone holding it can read the gist, no
+        login required. This tool prints those URLs, and your profile configuration may contain API
+        keys or tokens inline.
+
+        Please **redact gist URLs** (keep the first six characters: `https://gist.github.com/you/0f8fb0…`)
+        and **replace any secret value** with `<redacted>`.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, and what the tool reported. Paste the tool output if you have it.
+      placeholder: |
+        I ran gist_sync for the profile "dsh-tui" and it reported ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect instead?
+      description: If the README or a tool description says something different, quote it and link the section.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: The smallest sequence that shows the problem. A tool call with its exact arguments is ideal.
+      placeholder: |
+        1. Delete ~/.dsh/profiles/dsh-tui/cordis.patch.yml
+        2. Run gist_sync
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: status
+    attributes:
+      label: Output of gist_status
+      description: |
+        Run `gist_status` and paste the result. It reports the gh version, the auth account, the
+        resolved paths and every profile's state — which usually answers the question on its own.
+        Redact gist URLs.
+      render: text
+    validations:
+      required: false
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Windows 11 24H2 / Ubuntu 24.04 / macOS 15.2
+    validations:
+      required: true
+
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: '`node --version`, `gh --version`, and your DSH version.'
+      placeholder: node v22.23.1, gh 2.101.0, dsh 0.1.7-rc.2
+    validations:
+      required: true
+
+  - type: dropdown
+    id: backup
+    attributes:
+      label: Did this involve losing local files?
+      description: |
+        If yes, check `<stateDir>/backups/<profile>/` first — a copy was taken before any download
+        overwrote anything.
+      options:
+        - 'No'
+        - 'Yes, and I found a backup'
+        - 'Yes, and there is no backup'
+        - 'Not sure'
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else
+      description: |
+        Relevant config from the `dsh-gist-settings` row, whether `gh` is on your `PATH`, and whether
+        this reproduces with the offline suites (`npm test`).
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Confirmation
+      options:
+        - label: I have redacted gist URLs and any secret values in what I pasted above.
+          required: true
+        - label: I searched the existing issues for the same problem.
+          required: true

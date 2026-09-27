@@ -27,6 +27,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { apply } from '../index.js'
 
@@ -88,7 +89,7 @@ const ctx = {
 }
 apply(ctx, {
   dshHome: root,
-  ghPath: [process.execPath, path.join(import.meta.dirname, 'fake-gh.mjs')],
+  ghPath: [process.execPath, path.join(fileURLToPath(new URL('.', import.meta.url)), 'fake-gh.mjs')],
 })
 
 const results = []
