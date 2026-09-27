@@ -1,0 +1,10 @@
+# Normalize text files to LF in the repository, regardless of the authoring host.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
