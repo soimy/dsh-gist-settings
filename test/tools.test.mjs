@@ -50,13 +50,19 @@ apply(ctx, {
   ghPath: [process.execPath, path.join(here, 'fake-gh.mjs')],
 })
 
-/** Run a tool and return its single text block. */
+/**
+ * Run a tool the way the registry does: execute, then project the canonical
+ * value through `output.render`. Asserting the block shape here is the only
+ * place it is checked — the suite previously never called `render` at all.
+ */
 async function call(name, args) {
   const definition = tools.get(name)
   assert.ok(definition, `tool ${name} was not registered`)
-  const blocks = await definition.execute(args ?? {})
-  assert.ok(Array.isArray(blocks), `${name} must return content blocks`)
-  return blocks.map((b) => b.text).join('\n')
+  const value = await definition.execute(args, { signal: undefined })
+  const blocks = definition.output.render(args, value)
+  assert.ok(Array.isArray(blocks) && blocks.length > 0, `${name} must render content blocks`)
+  for (const block of blocks) assert.equal(block.type, 'text', `${name} must render text blocks`)
+  return blocks.map((block) => block.text).join('\n')
 }
 
 /* ------------------------------------------------------------- mini runner -- */
@@ -151,6 +157,55 @@ await check('a failing profile is reported without aborting the others', async (
 
 await check('apply() registered its registrations as one labelled effect', () => {
   assert.deepEqual(disposeLabels, ['dsh-gist-settings tools'])
+})
+
+/* ------------------------------------------------ argument validation gate -- */
+
+await check('a misspelled argument is rejected, not silently widened to every profile', async () => {
+  // `profil` used to be dropped, turning "sync alpha" into "sync everything".
+  await assert.rejects(() => call('gist_sync', { profil: 'alpha' }), /unknown argument "profil"/)
+})
+
+await check('a non-boolean force is rejected instead of being coerced', async () => {
+  // `Boolean("false") === true`, so this used to force a destructive overwrite.
+  await assert.rejects(() => call('gist_download', { force: 'false' }), /"force" must be a boolean/)
+  await assert.rejects(() => call('gist_sync', { force: 1 }), /"force" must be a boolean/)
+})
+
+await check('an explicit null is a type error, not an absent argument', async () => {
+  await assert.rejects(() => call('gist_download', { profile: null }), /"profile" must be a string/)
+  await assert.rejects(() => call('gist_upload', { force: null }), /"force" must be a boolean/)
+})
+
+await check('a non-object argument list is rejected', async () => {
+  for (const bad of [[], 'all', 42]) {
+    await assert.rejects(() => call('gist_download', bad), /expected an object/)
+  }
+})
+
+/* -------------------------------------------------- failure isolation, for real -- */
+
+await check('a genuinely failing profile does not abort the others', async () => {
+  // Empty beta's directory so its upload cannot succeed at all. The earlier
+  // case of this name only deleted gists, which is recoverable.
+  await fs.rm(path.join(root, 'profiles', 'beta'), { recursive: true, force: true })
+  await fs.mkdir(path.join(root, 'profiles', 'beta'), { recursive: true })
+
+  const body = await call('gist_upload')
+  assert.match(body, /beta: FAILED/, 'the failing profile must be reported')
+  assert.match(body, /alpha: (created|updated)/, 'the healthy profile must still be processed')
+})
+
+await check('gist_sync restores a profile whose tracked files were deleted locally', async () => {
+  // This is the disaster-recovery path, and the one the review found was both
+  // untested and wrong: it used to classify an emptied profile as local-ahead
+  // and upload, deleting the gist's only copy of those files.
+  const body = await call('gist_sync')
+  assert.match(body, /beta: downloaded/, 'tracked files missing locally must be restored, not deleted from the gist')
+  assert.match(body, /alpha: /)
+
+  const restored = await fs.readdir(path.join(root, 'profiles', 'beta'))
+  assert.ok(restored.includes('cordis.patch.yml'), 'the restored file must be back on disk')
 })
 
 /* ----------------------------------------------------------------- summary -- */

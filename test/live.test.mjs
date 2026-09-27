@@ -5,7 +5,8 @@
  * Unlike the other suites, this one is opt-in because it creates a real secret
  * gist on the authenticated account:
  *
- *   DSH_GIST_LIVE_TEST=1 node test/live.test.mjs
+ *   bash:        DSH_GIST_LIVE_TEST=1 node test/live.test.mjs
+ *   PowerShell:  $env:DSH_GIST_LIVE_TEST='1'; node test/live.test.mjs
  *
  * It works entirely inside a throwaway DSH_HOME under the OS temp directory, so
  * no real profile is read or written, and it deletes the gist it created even
@@ -49,6 +50,23 @@ console.log(`  fixture: ${root}\n`)
 
 const results = []
 let gistId = null
+
+/**
+ * Read the gist until `predicate` holds.
+ *
+ * A gist PATCH is not always immediately visible to the following GET, so a
+ * single read makes this suite flaky for reasons that have nothing to do with
+ * the plugin. Observed once in three runs before this retry was added.
+ */
+async function readGistUntil(predicate, { attempts = 12, delayMs = 500 } = {}) {
+  let gist
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    gist = await core.gistGet(ghPath, gistId)
+    if (predicate(gist)) return gist
+    await new Promise((resolve) => setTimeout(resolve, delayMs))
+  }
+  return gist
+}
 
 async function check(name, fn) {
   try {
@@ -94,18 +112,18 @@ try {
     const updated = await core.uploadProfile('verify', { ghPath, config })
     assert.equal(updated.created, false, 'expected an update, not a new gist')
     assert.equal(updated.gistId, gistId)
-    const gist = await core.gistGet(ghPath, gistId)
+    const gist = await readGistUntil((g) => /value: 2/.test(g.files['cordis.patch.yml'] ?? ''))
     assert.match(gist.files['cordis.patch.yml'], /value: 2/)
   })
 
   await check('a PATCH with a null file value really deletes the remote file', async () => {
     await core.gistPatch(ghPath, gistId, { files: { 'stale.yml': 'temporary\n' } })
-    const withStale = await core.gistGet(ghPath, gistId)
+    const withStale = await readGistUntil((g) => 'stale.yml' in g.files)
     assert.ok('stale.yml' in withStale.files, 'setup failed: stale.yml was not added')
 
     const pruned = await core.uploadProfile('verify', { ghPath, config })
     assert.equal(pruned.created, false)
-    const after = await core.gistGet(ghPath, gistId)
+    const after = await readGistUntil((g) => !('stale.yml' in g.files))
     assert.equal('stale.yml' in after.files, false, 'stale.yml should have been pruned')
   })
 
@@ -129,7 +147,7 @@ try {
   await check('a forced sync resolves the divergence on the real remote', async () => {
     const result = await core.syncProfile('verify', { ghPath, config, force: true })
     assert.equal(result.action, 'forced-upload')
-    const gist = await core.gistGet(ghPath, gistId)
+    const gist = await readGistUntil((g) => /LOCAL WINS\?/.test(g.files['cordis.patch.yml'] ?? ''))
     assert.match(gist.files['cordis.patch.yml'], /LOCAL WINS\?/)
   })
 

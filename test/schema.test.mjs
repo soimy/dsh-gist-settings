@@ -5,18 +5,27 @@
  *
  * The plugin deliberately imports nothing from the DSH installation, which is
  * what keeps it immune to module-resolution changes — but it also means the
- * Harness never type-checks these definitions. This test closes that gap: it
- * replays the checks `ToolRuntime.register()` performs, so a Harness upgrade
- * that tightens the supported JSON Schema subset fails here instead of at
- * profile startup.
+ * Harness never type-checks these definitions. This suite closes that gap by
+ * replaying the checks the runtime performs:
  *
- * Skips (exit 0) when no DSH installation can be located; set DSH_TOOLS_DIR to
- * point at one explicitly.
+ *   - `ToolRuntime.register()`: output shape, `assertSupportedJsonSchema` on the
+ *     parameters and on the output schema, model-readable docs;
+ *   - `defineTool()`: `validateJsonSchemaValue` over the arguments — which the
+ *     plugin's own `checkArgs` reimplements by hand, so both are compared;
+ *   - `createSuccessResult()`: the value `execute` returns really satisfies the
+ *     declared `output.schema`.
+ *
+ * Finding no DSH installation FAILS the suite by default, because skipping would
+ * leave `npm test` green with none of these checks having run. Set
+ * `DSH_ALLOW_SCHEMA_SKIP=1` to accept the skip, or `DSH_TOOLS_DIR` to point at an
+ * installation explicitly.
  *
  * Run with: node test/schema.test.mjs
  */
 
+import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 
 import { apply } from '../index.js'
@@ -39,15 +48,31 @@ function findDshTools() {
 
 const toolsDir = findDshTools()
 if (!toolsDir) {
-  console.log('\nSKIP: no installed @deepseek-ai/dsh-tools found; set DSH_TOOLS_DIR to run this suite.\n')
-  process.exit(0)
+  const message =
+    'no installed @deepseek-ai/dsh-tools found; set DSH_TOOLS_DIR to run the schema-conformance suite'
+  if (process.env.DSH_ALLOW_SCHEMA_SKIP === '1') {
+    console.log(`\nSKIP: ${message} (DSH_ALLOW_SCHEMA_SKIP=1).\n`)
+    process.exit(0)
+  }
+  console.error(`\nFAIL: ${message}. Set DSH_ALLOW_SCHEMA_SKIP=1 to accept a skip instead.\n`)
+  process.exit(1)
 }
 
-const { assertSupportedJsonSchema } = await import(
-  new URL(`file://${path.join(toolsDir, 'lib', 'types', 'json-schema.js').replace(/\\/g, '/')}`).href
+const asFileUrl = (p) => new URL(`file://${p.replace(/\\/g, '/')}`).href
+const { assertSupportedJsonSchema, validateJsonSchemaValue } = await import(
+  asFileUrl(path.join(toolsDir, 'lib', 'types', 'json-schema.js'))
 )
 
-/* Capture the definitions exactly as the runtime would receive them. */
+/* Drive the plugin against the fake gh so the suite stays hermetic. */
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-gist-schema-'))
+process.env.FAKE_GH_STORE = path.join(root, 'fake-store.json')
+for (const name of ['alpha']) {
+  const dir = path.join(root, 'profiles', name)
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, 'cordis.patch.yml'), `- id: ${name}\n`, 'utf8')
+  fs.writeFileSync(path.join(dir, 'package.json'), `{\n  "name": "${name}"\n}\n`, 'utf8')
+}
+
 const definitions = []
 const ctx = {
   tools: {
@@ -61,7 +86,10 @@ const ctx = {
     return () => {}
   },
 }
-apply(ctx, {})
+apply(ctx, {
+  dshHome: root,
+  ghPath: [process.execPath, path.join(import.meta.dirname, 'fake-gh.mjs')],
+})
 
 const results = []
 async function check(name, fn) {
@@ -78,18 +106,27 @@ async function check(name, fn) {
 
 console.log(`\ndsh-gist-settings schema conformance\n  dsh-tools: ${toolsDir}\n`)
 
+/** Arguments the real validator rejects, paired with what they would do if let through. */
+const BAD_ARGS = [
+  { label: 'a misspelled key', args: { profil: 'alpha' } },
+  { label: 'a string for a boolean', args: { force: 'false' } },
+  { label: 'an explicit null for a string', args: { profile: null } },
+  { label: 'an explicit null for a boolean', args: { force: null } },
+  { label: 'a number for a boolean', args: { force: 0 } },
+  { label: 'an array instead of an object', args: [] },
+  { label: 'a string instead of an object', args: 'alpha' },
+]
+
 await check('apply() produced definitions to validate', () => {
   if (definitions.length === 0) throw new Error('no tool definitions were registered')
 })
 
 for (const definition of definitions) {
-  const { name } = definition
+  const { name, parameters } = definition
 
   await check(`${name}: output declares { schema, render }`, () => {
     const output = definition.output
-    if (output === undefined || typeof output !== 'object') {
-      throw new Error('missing output object')
-    }
+    if (output === undefined || typeof output !== 'object') throw new Error('missing output object')
     if (typeof output.render !== 'function') throw new Error('output.render must be a function')
     if (output.presentationMeta !== undefined && typeof output.presentationMeta !== 'function') {
       throw new Error('output.presentationMeta must be a function when present')
@@ -97,28 +134,54 @@ for (const definition of definitions) {
   })
 
   await check(`${name}: parameters pass assertSupportedJsonSchema`, () => {
-    assertSupportedJsonSchema(definition.parameters)
-    if (definition.parameters.type !== 'object') {
-      throw new Error('parameters.root must be an object schema')
-    }
+    assertSupportedJsonSchema(parameters)
+    assert.equal(parameters.type, 'object', 'parameters root must be an object schema')
   })
 
   await check(`${name}: output.schema passes assertSupportedJsonSchema`, () => {
     assertSupportedJsonSchema(definition.output.schema)
   })
 
+  await check(`${name}: a valid call returns a value its own output.schema accepts`, async () => {
+    const value = await definition.execute({}, { signal: undefined })
+    const violations = validateJsonSchemaValue(definition.output.schema, value, 'value')
+    assert.deepEqual(violations, [], `output schema violations: ${JSON.stringify(violations)}`)
+
+    const blocks = definition.output.render({}, value)
+    assert.ok(Array.isArray(blocks) && blocks.length > 0, 'render must produce content blocks')
+    for (const block of blocks) {
+      assert.equal(block.type, 'text', 'every block must be a text block')
+      assert.equal(typeof block.text, 'string', 'a text block needs string text')
+    }
+  })
+
   await check(`${name}: description and parameter docs are model-ready`, () => {
     if (typeof definition.description !== 'string' || definition.description.length < 40) {
       throw new Error('description must be a string of at least 40 characters')
     }
-    for (const [key, node] of Object.entries(definition.parameters.properties ?? {})) {
+    for (const [key, node] of Object.entries(parameters.properties ?? {})) {
       if (typeof node.description !== 'string' || node.description.length === 0) {
         throw new Error(`parameter "${key}" needs a description for the model`)
       }
     }
   })
+
+  for (const { label, args } of BAD_ARGS) {
+    await check(`${name}: rejects ${label}`, async () => {
+      // The real contract rejects it...
+      const violations = validateJsonSchemaValue(parameters, args, '')
+      if (violations.length === 0) return // the real validator allows it; nothing to compare
+      // ...so the plugin must too, or the model never learns its call was wrong.
+      await assert.rejects(
+        () => definition.execute(args, { signal: undefined }),
+        /invalid arguments/,
+        'the plugin accepted arguments the real validator rejects',
+      )
+    })
+  }
 }
 
 const failed = results.filter((ok) => !ok).length
 console.log(`\n${results.length - failed}/${results.length} passed\n`)
 if (failed > 0) process.exitCode = 1
+fs.rmSync(root, { recursive: true, force: true })

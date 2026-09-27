@@ -19,29 +19,68 @@ import * as core from './lib/core.js'
 /** Registering tools is the only service this plugin needs. */
 export const inject = ['tools']
 
-/** Accept only the config fields we understand; ignore anything else. */
+const KNOWN_CONFIG_KEYS = ['ghPath', 'dshHome', 'profilesDir', 'stateDir', 'profileFiles']
+
+/**
+ * Read and validate this row's `config:` block.
+ *
+ * The plugin declares no `Config` schema, so the Loader passes the block through
+ * untouched. Validating it here is what turns a typo into a clear error rather
+ * than a silent fall back to defaults — which matters most for `profileFiles`,
+ * where a mistake would quietly change which files get backed up.
+ */
 function readConfig(raw) {
-  const input = raw && typeof raw === 'object' ? raw : {}
-  const str = (value) => (typeof value === 'string' && value.trim() ? value.trim() : undefined)
-  const list = (value) =>
-    Array.isArray(value) && value.length > 0 ? value.filter((v) => typeof v === 'string' && v) : undefined
+  const input = raw === undefined || raw === null ? {} : raw
+  if (typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error(`config must be a mapping, received ${Array.isArray(input) ? 'an array' : typeof input}`)
+  }
+
+  const unknown = Object.keys(input).filter((key) => !KNOWN_CONFIG_KEYS.includes(key))
+  if (unknown.length > 0) {
+    throw new Error(
+      `unknown config key${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}; ` +
+        `known keys are ${KNOWN_CONFIG_KEYS.join(', ')}`,
+    )
+  }
+
+  const str = (key) => {
+    const value = input[key]
+    if (value === undefined) return undefined
+    if (typeof value !== 'string' || value.trim() === '') {
+      throw new Error(`config.${key} must be a non-empty string`)
+    }
+    return value.trim()
+  }
+
+  const stringList = (key) => {
+    const value = input[key]
+    if (value === undefined) return undefined
+    if (!Array.isArray(value) || value.length === 0) {
+      throw new Error(`config.${key} must be a non-empty array of strings`)
+    }
+    const parts = value.map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+    if (parts.some((entry) => entry === '')) {
+      throw new Error(`config.${key} must contain only non-empty strings`)
+    }
+    return parts
+  }
+
   /**
    * `ghPath` is a string for a normal install. An array is the escape hatch for
    * reaching gh through a wrapper — `['wsl', 'gh']`, a shim script, a portable
    * build invoked by its interpreter.
    */
-  const ghPath = (() => {
-    const single = str(input.ghPath)
-    if (single) return single
-    const parts = list(input.ghPath)
-    return parts && parts.length > 0 ? parts.map((part) => part.trim()) : undefined
-  })()
+  let ghPath
+  if (input.ghPath !== undefined) {
+    ghPath = Array.isArray(input.ghPath) ? stringList('ghPath') : str('ghPath')
+  }
+
   return {
     ghPath,
-    dshHome: str(input.dshHome),
-    profilesDir: str(input.profilesDir),
-    stateDir: str(input.stateDir),
-    profileFiles: list(input.profileFiles),
+    dshHome: str('dshHome'),
+    profilesDir: str('profilesDir'),
+    stateDir: str('stateDir'),
+    profileFiles: stringList('profileFiles'),
   }
 }
 
@@ -64,9 +103,19 @@ async function requireGh(config) {
   return resolved.path
 }
 
-/** Guard a profile name against path traversal before it reaches the filesystem. */
+/**
+ * Guard a profile name before it reaches the filesystem.
+ * Mirrors the framework's own profile-name rules, which also reserve the shared
+ * `node_modules` store, and `lib/core.js` re-checks containment against real
+ * paths so a junction cannot redirect the read or the write.
+ */
 function assertProfileName(name) {
-  if (typeof name !== 'string' || !/^[A-Za-z0-9._-]+$/.test(name) || name.startsWith('.')) {
+  if (
+    typeof name !== 'string' ||
+    !/^[A-Za-z0-9._-]+$/.test(name) ||
+    name.startsWith('.') ||
+    name === 'node_modules'
+  ) {
     throw new Error(`invalid profile name: ${JSON.stringify(name)}`)
   }
   return name
@@ -80,8 +129,10 @@ const STATUS_LABEL = {
   'local-ahead': 'local changes to upload',
   'remote-ahead': 'gist changes to download',
   'diverged': 'DIVERGED - needs a decision',
-  'missing-gist': 'gist missing (deleted?)',
-  'missing-local': 'no local config files',
+  'missing-local': 'tracked files missing locally - run gist_download to restore',
+  'missing-gist': 'gist deleted - the next upload recreates it',
+  'unreachable': 'gist UNREACHABLE (not deleted) - retry when connected',
+  'unknown': 'unknown - gh is unavailable, remote state not checked',
 }
 
 function formatStatusReport(health, rows, statePath) {
@@ -92,9 +143,11 @@ function formatStatusReport(health, rows, statePath) {
   } else {
     lines.push(`gh:   NOT FOUND - ${health.gh.reason}`)
   }
-  lines.push(`auth: ${health.auth?.authenticated ? `ok (${health.auth.account})` : 'NOT AUTHENTICATED - run `gh auth login`'}`)
+  lines.push(
+    `auth: ${health.auth?.authenticated ? `ok (${health.auth.account})` : 'NOT AUTHENTICATED - run `gh auth login`'}`,
+  )
   lines.push(`home: ${health.dshHome}`)
-  lines.push(`state:${statePath ? ` ${statePath}` : ''}`)
+  lines.push(`state: ${statePath}`)
   lines.push('')
   if (rows.length === 0) {
     lines.push('No profiles found.')
@@ -106,6 +159,9 @@ function formatStatusReport(health, rows, statePath) {
     if (row.gistUrl) lines.push(`  gist:   ${row.gistUrl}`)
     if (row.error) lines.push(`  error:  ${row.error}`)
     if (row.missing?.length) lines.push(`  absent: ${row.missing.join(', ')}`)
+    if (row.untrackedRemoteFiles?.length) {
+      lines.push(`  gist also holds (untracked here): ${row.untrackedRemoteFiles.join(', ')}`)
+    }
   }
   return lines.join('\n')
 }
@@ -113,26 +169,83 @@ function formatStatusReport(health, rows, statePath) {
 /* ------------------------------------------------------------- tool shape -- */
 
 /**
- * Build a registry-ready tool whose canonical value is its own content blocks.
- * Mirrors the harness's own `defineContentToolFixture` contract.
+ * Validate and narrow one tool call's arguments.
+ *
+ * These definitions are hand-written rather than built with the harness's
+ * `defineTool`, so nothing validates the model's arguments for us. Without this
+ * a `force: "false"` string arrives truthy and silently forces a destructive
+ * overwrite, and a misspelled `profile` widens the call to every profile.
+ *
+ * Values are checked, never coerced: a wrong type or an explicit `null` is an
+ * error the model can correct, not something to guess at.
  */
-function contentTool({ name, description, parameters, run }) {
+function checkArgs(toolName, parameters, args) {
+  const input = args === undefined || args === null ? {} : args
+  if (typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error(
+      `invalid arguments for ${toolName}: expected an object, received ${Array.isArray(input) ? 'an array' : typeof input}`,
+    )
+  }
+
+  const properties = parameters.properties ?? {}
+  const problems = []
+
+  for (const key of Object.keys(input)) {
+    if (!Object.hasOwn(properties, key)) problems.push(`unknown argument "${key}"`)
+  }
+
+  const accepted = {}
+  for (const [key, schema] of Object.entries(properties)) {
+    const value = input[key]
+    if (value === undefined) continue
+    if (schema.type === 'string') {
+      if (typeof value !== 'string') problems.push(`"${key}" must be a string, received ${JSON.stringify(value)}`)
+      else accepted[key] = value
+    } else if (schema.type === 'boolean') {
+      if (typeof value !== 'boolean') problems.push(`"${key}" must be a boolean, received ${JSON.stringify(value)}`)
+      else accepted[key] = value
+    } else {
+      // Refuse at construction rather than waving an unvalidated value through.
+      throw new Error(`${toolName}: parameter "${key}" declares unsupported type ${JSON.stringify(schema.type)}`)
+    }
+  }
+
+  if (problems.length > 0) throw new Error(`invalid arguments for ${toolName}: ${problems.join('; ')}`)
+  return accepted
+}
+
+/**
+ * Build a registry-ready tool.
+ *
+ * The canonical value is a domain-owned DTO rather than the framework's
+ * `@internal` content-blocks-as-value test fixture: `output.schema` is what PTC
+ * mode projects into a generated SDK, so an untyped array would hand the model
+ * `list[Any]` instead of a described result.
+ */
+function contentTool({ name, description, parameters, run, concurrencySafe = false }) {
   return {
     name,
     description,
     parameters,
     output: {
-      schema: { type: 'array' },
-      render: (_args, value) => value,
+      schema: {
+        type: 'object',
+        properties: { text: { type: 'string' } },
+        additionalProperties: false,
+      },
+      render: (_args, value) => [{ type: 'text', text: value.text }],
     },
-    async execute(args) {
-      const input = args && typeof args === 'object' ? args : {}
-      return await run(input)
+    // The registry treats an undeclared classifier as exclusive; only the
+    // read-only status tool may join a parallel batch.
+    ...(concurrencySafe ? { isConcurrencySafe: () => true } : {}),
+    async execute(args, exec) {
+      return await run(checkArgs(name, parameters, args), exec)
     },
   }
 }
 
-const text = (body) => [{ type: 'text', text: body }]
+/** The canonical value every tool returns; `output.render` turns it into content. */
+const text = (body) => ({ text: body })
 
 /* ----------------------------------------------------------------- tools -- */
 
@@ -141,11 +254,13 @@ function buildTools(ctx, userConfig) {
 
   const statusTool = contentTool({
     name: 'gist_status',
+    concurrencySafe: true,
     description:
       'Report whether the local gh CLI is installed and authenticated, and show every DeepSeek Harness ' +
-      'profile alongside its GitHub Gist: the gist URL, and whether the profile is in sync, has local ' +
-      'changes to upload, has gist changes to download, or has diverged. Read-only; changes nothing. ' +
-      'Use this first to see what needs syncing.',
+      'profile alongside its GitHub Gist: the gist URL and whether the profile is in sync, has local ' +
+      'changes to upload, has gist changes to download, has diverged, has tracked files missing locally, ' +
+      'or has an unreachable or deleted gist. Never touches profile files or the gist; it may repair a ' +
+      'stale sync baseline in its own state file. Use this first to see what needs syncing.',
     parameters: {
       type: 'object',
       properties: {
@@ -156,17 +271,28 @@ function buildTools(ctx, userConfig) {
       },
       additionalProperties: false,
     },
-    run: async ({ profile }) => {
-      const h = await core.health(withConfig())
-      const state = await core.loadState(withConfig())
-      const names = profile ? [assertProfileName(profile)] : await core.listProfiles(withConfig())
+    run: async ({ profile }, exec) => {
+      const config = withConfig()
+      const signal = exec?.signal
+      const h = await core.health(config)
+      const state = await core.loadState(config)
+      const names = profile ? [assertProfileName(profile)] : await core.listProfiles(config)
+      const online = h.gh.found && h.auth?.authenticated === true
       const rows = []
       for (const name of names) {
-        if (!h.gh.found) {
-          rows.push({ profile: name, status: 'untracked' })
+        if (!online) {
+          // Without a usable gh the gist cannot be read, but what this machine
+          // tracks is still known from the state file. Claiming "not tracked"
+          // here would be a lie in exactly the situation the tool exists for.
+          const record = state.profiles?.[name]
+          rows.push({
+            profile: name,
+            status: record?.gistId ? 'unknown' : 'untracked',
+            gistUrl: record?.gistUrl ?? null,
+          })
           continue
         }
-        rows.push(await core.profileStatus(name, { ghPath: h.gh.path, config: withConfig(), state }))
+        rows.push(await core.profileStatus(name, { ghPath: h.gh.path, config, state, signal }))
       }
       const tracking = Object.keys(state.profiles ?? {})
       const body = formatStatusReport(h, rows, h.statePath)
@@ -181,9 +307,13 @@ function buildTools(ctx, userConfig) {
   const uploadTool = contentTool({
     name: 'gist_upload',
     description:
-      'Upload local DeepSeek Harness profile configuration to GitHub Gists (the "update/sync out" direction). ' +
-      'Creates a secret gist on a profile\'s first upload, then updates that same gist on later runs, including ' +
-      'removing gist files that are no longer tracked. Never touches local files.',
+      'Upload local DeepSeek Harness profile configuration to GitHub Gists (the "sync out" direction). ' +
+      'Creates a secret gist on a profile\'s first upload, then updates that same gist on later runs. ' +
+      'Removes gist files that are no longer TRACKED (absent from the configured profileFiles), so a file ' +
+      'added to the gist by hand is deleted, with no backup of it. A tracked file that is merely missing ' +
+      'from disk is never deleted — the upload fails instead, because the gist may hold the only copy. ' +
+      'Never modifies local files. If the gist was genuinely deleted, a new one is created and the ' +
+      'replaced URL is reported.',
     parameters: {
       type: 'object',
       properties: {
@@ -195,6 +325,12 @@ function buildTools(ctx, userConfig) {
           type: 'string',
           description: 'Gist description to set. Defaults to a generated per-profile description.',
         },
+        force: {
+          type: 'boolean',
+          description:
+            'Also delete gist files that are tracked but missing from disk, discarding the only ' +
+            'remaining copy. Defaults to false, which makes such an upload fail instead.',
+        },
         verifyGh: {
           type: 'boolean',
           description: 'Check that gh is installed and authenticated before uploading. Defaults to true.',
@@ -202,8 +338,9 @@ function buildTools(ctx, userConfig) {
       },
       additionalProperties: false,
     },
-    run: async ({ profile, description, verifyGh }) => {
+    run: async ({ profile, description, force, verifyGh }, exec) => {
       const config = withConfig()
+      const signal = exec?.signal
       const ghPath = verifyGh === false ? (await core.resolveGh(config)).path : await requireGh(config)
       if (!ghPath) throw new Error('gh CLI not found; set `ghPath` in this plugin\'s config.')
       const names = profile ? [assertProfileName(profile)] : await core.listProfiles(config)
@@ -212,12 +349,17 @@ function buildTools(ctx, userConfig) {
       const lines = []
       for (const name of names) {
         try {
-          const result = await core.uploadProfile(name, { ghPath, config, description })
-          lines.push(
-            `${name}: ${result.created ? 'created' : 'updated'} ${result.gistUrl}\n` +
-              `  files: ${result.uploadedFiles.join(', ')}` +
-              (result.missing.length ? `\n  absent locally: ${result.missing.join(', ')}` : ''),
-          )
+          const result = await core.uploadProfile(name, { ghPath, config, description, force, signal })
+          const parts = [`${name}: ${result.created ? 'created' : 'updated'} ${result.gistUrl}`]
+          parts.push(`  files: ${result.uploadedFiles.join(', ')}`)
+          if (result.replaced) {
+            parts.push(`  REPLACED a gist that could not be read; the previous one was ${result.replaced}`)
+          }
+          if (result.pruned.length) {
+            parts.push(`  removed from the gist (no longer tracked): ${result.pruned.join(', ')}`)
+          }
+          if (result.missing.length) parts.push(`  absent locally: ${result.missing.join(', ')}`)
+          lines.push(parts.join('\n'))
         } catch (error) {
           lines.push(`${name}: FAILED - ${error.message}`)
         }
@@ -230,8 +372,9 @@ function buildTools(ctx, userConfig) {
     name: 'gist_download',
     description:
       'Download GitHub Gist configuration over the local DeepSeek Harness profile files (the "sync in" ' +
-      'direction). The existing local files are backed up under the state directory first. Refuses to ' +
-      'overwrite local changes that were never uploaded unless force is true.',
+      'direction). Local files are backed up under the state directory first. Restoring files that are ' +
+      'simply missing locally needs no force; overwriting local changes that were never uploaded does, ' +
+      'and is refused otherwise. Tracked files the gist does not carry are kept, never deleted.',
     parameters: {
       type: 'object',
       properties: {
@@ -248,8 +391,9 @@ function buildTools(ctx, userConfig) {
       },
       additionalProperties: false,
     },
-    run: async ({ profile, force }) => {
+    run: async ({ profile, force }, exec) => {
       const config = withConfig()
+      const signal = exec?.signal
       const ghPath = await requireGh(config)
       const state = await core.loadState(config)
       const names = profile ? [assertProfileName(profile)] : await core.listProfiles(config)
@@ -261,12 +405,13 @@ function buildTools(ctx, userConfig) {
       const lines = []
       for (const name of tracked) {
         try {
-          const result = await core.downloadProfile(name, { ghPath, config, force: Boolean(force) })
-          lines.push(
-            `${name}: restored from ${result.gistUrl}\n` +
-              `  files: ${result.written.join(', ')}` +
-              (result.backupDir ? `\n  previous files backed up to: ${result.backupDir}` : ''),
-          )
+          const result = await core.downloadProfile(name, { ghPath, config, force, signal })
+          const parts = [`${name}: restored from ${result.gistUrl}`, `  files: ${result.written.join(', ')}`]
+          if (result.keptLocally.length) {
+            parts.push(`  kept locally (the gist does not carry them): ${result.keptLocally.join(', ')}`)
+          }
+          if (result.backupDir) parts.push(`  previous files backed up to: ${result.backupDir}`)
+          lines.push(parts.join('\n'))
         } catch (error) {
           lines.push(`${name}: FAILED - ${error.message}`)
         }
@@ -279,9 +424,11 @@ function buildTools(ctx, userConfig) {
     name: 'gist_sync',
     description:
       'Synchronise local DeepSeek Harness profile configuration with GitHub Gists in one step. ' +
-      'Uploads when only local files changed, downloads when only the gist changed, creates a gist for an ' +
-      'untracked profile, and does nothing when both sides already match. When both sides changed it refuses ' +
-      'to guess and reports a divergence unless force is true.',
+      'Uploads when only local files changed, downloads when only the gist changed, restores tracked ' +
+      'files that went missing locally, creates a gist for an untracked or genuinely deleted one, and ' +
+      'does nothing when both sides already match. When both sides changed it refuses to guess and ' +
+      'reports a divergence unless force is true. A gist that merely cannot be reached is never treated ' +
+      'as deleted.',
     parameters: {
       type: 'object',
       properties: {
@@ -296,8 +443,9 @@ function buildTools(ctx, userConfig) {
       },
       additionalProperties: false,
     },
-    run: async ({ profile, force }) => {
+    run: async ({ profile, force }, exec) => {
       const config = withConfig()
+      const signal = exec?.signal
       const ghPath = await requireGh(config)
       const names = profile ? [assertProfileName(profile)] : await core.listProfiles(config)
       if (names.length === 0) return text('No profiles found; nothing to sync.')
@@ -305,11 +453,20 @@ function buildTools(ctx, userConfig) {
       const lines = []
       for (const name of names) {
         try {
-          const result = await core.syncProfile(name, { ghPath, config, force: Boolean(force) })
-          const detail =
+          const result = await core.syncProfile(name, { ghPath, config, force, signal })
+          let detail =
             result.action === 'noop'
               ? `already in sync (${result.gistUrl ?? 'no gist url'})`
               : `${result.action} ${result.gistUrl ?? ''}`.trim()
+          if (result.replaced) {
+            detail += `\n  REPLACED a gist that could not be read; the previous one was ${result.replaced}`
+          }
+          if (result.pruned?.length) {
+            detail += `\n  removed from the gist (no longer tracked): ${result.pruned.join(', ')}`
+          }
+          if (result.keptLocally?.length) {
+            detail += `\n  kept locally (the gist does not carry them): ${result.keptLocally.join(', ')}`
+          }
           lines.push(`${name}: ${detail}`)
         } catch (error) {
           lines.push(`${name}: FAILED - ${error.message}`)
