@@ -41,6 +41,7 @@ const profileDir = (name) => path.join(root, 'profiles', name)
 const store = async () => JSON.parse(await fs.readFile(process.env.FAKE_GH_STORE, 'utf8'))
 const freshEnv = () => {
   delete process.env.FAKE_GH_TRUNCATE
+  delete process.env.FAKE_GH_RAW_BASE
   delete process.env.FAKE_GH_FAIL_GET
   delete process.env.FAKE_GH_FAIL_GET_ALL
   delete process.env.FAKE_GH_UNAUTHENTICATED
@@ -213,19 +214,62 @@ await check('editing the SECOND tracked file is detected, not just the first', a
 
 /* ---------------------------------------------------- truncation round trip -- */
 
-await check('a truncated gist file is fetched whole through raw_url', async () => {
+await check('a truncated gist file is fetched whole from the raw_url the API named', async () => {
   await seed('epsilon', { 'cordis.patch.yml': 'abcdefghijklmnopqrstuvwxyz\n', 'package.json': '{}\n' })
   await core.uploadProfile('epsilon', { ghPath, config })
   const state = await core.loadState(config)
   const gistId = state.profiles.epsilon.gistId
 
   process.env.FAKE_GH_TRUNCATE = 'cordis.patch.yml'
-  const gist = await core.gistGet(ghPath, gistId)
+  const calls = []
+  // Injected rather than served by the double: the claim under test is that the
+  // plugin asks the URL the API named, with `fetch`, and takes the whole body.
+  // Asserting against a URL this suite also happens to serve would only prove the
+  // double agrees with itself.
+  const fetchImpl = async (url, options) => {
+    calls.push({ url, options })
+    return { ok: true, status: 200, statusText: 'OK', text: async () => 'abcdefghijklmnopqrstuvwxyz\n' }
+  }
+
+  const gist = await core.gistGet(ghPath, gistId, { fetchImpl })
   assert.deepEqual(gist.truncated, ['cordis.patch.yml'])
   assert.equal(
     gist.files['cordis.patch.yml'],
     'abcdefghijklmnopqrstuvwxyz\n',
-    'the raw_url fallback must return the whole file, not the 8-character prefix',
+    'the raw_url fetch must return the whole file, not the 8-character prefix the API truncated to',
+  )
+  assert.equal(calls.length, 1, 'exactly one fetch, so the raw URL is not routed back through gh')
+  assert.equal(calls[0].url, `https://gist.githubusercontent.com/testuser/${gistId}/raw/cordis.patch.yml`)
+  assert.equal(calls[0].options.redirect, 'follow')
+})
+
+await check('a truncated file whose raw_url points elsewhere is refused unfetched', async () => {
+  process.env.FAKE_GH_TRUNCATE = 'cordis.patch.yml'
+  process.env.FAKE_GH_RAW_BASE = 'https://evil.example/collect'
+  const state = await core.loadState(config)
+  let fetched = 0
+  await assert.rejects(
+    () =>
+      core.gistGet(ghPath, state.profiles.epsilon.gistId, {
+        fetchImpl: async () => {
+          fetched += 1
+          return { ok: true, status: 200, statusText: 'OK', text: async () => 'leaked' }
+        },
+      }),
+    /not a trusted GitHub URL/,
+  )
+  assert.equal(fetched, 0, 'an untrusted URL must not be requested at all')
+})
+
+await check('a raw_url answering with an error status is reported, not silently truncated', async () => {
+  process.env.FAKE_GH_TRUNCATE = 'cordis.patch.yml'
+  const state = await core.loadState(config)
+  await assert.rejects(
+    () =>
+      core.gistGet(ghPath, state.profiles.epsilon.gistId, {
+        fetchImpl: async () => ({ ok: false, status: 403, statusText: 'Forbidden', text: async () => '' }),
+      }),
+    /could not be fetched from .*HTTP 403 Forbidden/,
   )
 })
 

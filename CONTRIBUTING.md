@@ -70,18 +70,20 @@ Knowing which suite covers what saves a lot of guessing.
 | Suite | Cases | Proves |
 |---|---|---|
 | `npm run test:sync` | 19 | The engine's whole lifecycle against an in-memory `gh`: create, upload, divergence, download, backup, pruning, recreation, idempotency. |
-| `npm run test:tools` | 21 | The tool layer: registration, argument validation, profile-name resolution, and that one failing profile never aborts the others. |
+| `npm run test:tools` | 22 | The tool layer: registration, argument validation, config validation at load, profile-name resolution, and that one failing profile never aborts the others. |
 | `npm run test:schema` | 49 | The hand-written definitions against the Harness's *own* validators — the registration contract, the supported JSON Schema subset, argument validation, and that each returned value satisfies its declared output schema. |
-| `npm run test:regression` | 27 | The specific defects an adversarial review found. Every case here fails if its fix is reverted. |
-| `npm run test:live` | 10 | The real GitHub round trip. Opt-in, and it deletes the gist it creates. |
+| `npm run test:regression` | 29 | The specific defects an adversarial review found. Every case here fails if its fix is reverted. |
+| `npm run test:safety` | 15 | The guarantees the README makes: containment for the profile and every tracked file, an all-or-nothing download, `force` doing what it says, recovery of a profile whose directory is gone, one-sync convergence after a remote deletion, and cross-process state locking. One case needs a privilege Windows does not grant by default and reports a skip. |
+| `npm run test:live` | 11 | The real GitHub round trip, including a file above the API's truncation threshold. Opt-in, and it deletes every gist it creates. |
 
 `test/schema.test.mjs` **fails** rather than skipping when it cannot find a DSH installation, because
 a silent skip would leave `npm test` green with none of those checks having run. Set
 `DSH_ALLOW_SCHEMA_SKIP=1` when you are working on something unrelated.
 
-The regression suite exists because a mutation audit found that 32 of 43 deliberately injected bugs
-survived the original suite. Treat "the tests pass" as a starting point, not a conclusion: prefer a
-case that fails before your change.
+The regression and safety suites exist because a mutation audit found that 32 of 43 deliberately
+injected bugs survived the original suite, and because a re-review found that several guards stopped
+one level short of what they claimed. Treat "the tests pass" as a starting point, not a conclusion:
+prefer a case that fails before your change.
 
 ## Changing behaviour
 
@@ -214,14 +216,15 @@ plugin_manager  action: install_bundle  target: <此仓库的绝对路径>
 | 套件 | 用例数 | 证明的内容 |
 |---|---|---|
 | `npm run test:sync` | 19 | 引擎完整生命周期（内存版 gh）：创建、上传、分叉、下载、备份、清理、重建、幂等。 |
-| `npm run test:tools` | 21 | 工具层：注册、参数校验、profile 名解析、单个 profile 失败不会中断其他。 |
+| `npm run test:tools` | 22 | 工具层：注册、参数校验、加载时的配置校验、profile 名解析、单个 profile 失败不会中断其他。 |
 | `npm run test:schema` | 49 | 手写定义 vs Harness **自带**校验器：注册契约、受支持的 JSON Schema 子集、参数校验、返回值满足声明的输出 schema。 |
-| `npm run test:regression` | 27 | 对抗性审核发现的具体缺陷。**每一条在修复被回退时都会失败。** |
-| `npm run test:live` | 10 | 真实 GitHub 往返。需显式开启，且会删除自己创建的 gist。 |
+| `npm run test:regression` | 29 | 对抗性审核发现的具体缺陷。**每一条在修复被回退时都会失败。** |
+| `npm run test:safety` | 15 | README 承诺的那些保证：profile 与每个受追踪文件的目录包容、全有或全无的下载、`force` 说到做到、目录被整个删掉后的恢复、远端删除后一次同步即收敛、以及跨进程状态锁。其中一条需要 Windows 默认不授予的权限，会报告为 skip。 |
+| `npm run test:live` | 11 | 真实 GitHub 往返，包含一个超过 API 截断阈值的文件。需显式开启，且会删除自己创建的每一个 gist。 |
 
 `test/schema.test.mjs` 找不到 DSH 安装时**会失败而不是跳过**——静默跳过会让 `npm test` 全绿但实际上一个校验都没跑。做无关改动时可设 `DSH_ALLOW_SCHEMA_SKIP=1`。
 
-回归套件的存在是因为变异审计发现：**43 个故意注入的 bug 里有 32 个能骗过原本的测试**。所以请把"测试通过"当成起点而非结论——最好能给出一个"改动前会失败"的用例。
+回归套件与安全套件的存在，是因为变异审计发现：**43 个故意注入的 bug 里有 32 个能骗过原本的测试**，也因为第二轮复审发现若干防线只做到了它们声称的上一层。所以请把"测试通过"当成起点而非结论——最好能给出一个"改动前会失败"的用例。
 
 ### 修改行为
 

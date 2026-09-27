@@ -12,6 +12,8 @@
  *   FAKE_GH_STORE          path to the JSON store (required)
  *   FAKE_GH_TRUNCATE       comma-separated file names served `truncated: true`
  *                          with a `raw_url`, as real GitHub does for large files
+ *   FAKE_GH_RAW_BASE       origin used to build those `raw_url` values, so a test
+ *                          can present one the plugin must refuse to follow
  *   FAKE_GH_FAIL_GET       comma-separated gist ids whose GET fails with HTTP 500
  *   FAKE_GH_FAIL_GET_ALL   "1" to fail every gist GET
  *   FAKE_GH_UNAUTHENTICATED "1" to make `auth status` report a logged-out CLI
@@ -64,7 +66,8 @@ function fail(message, code = 1) {
 }
 
 function rawUrlFor(gist, name) {
-  return `https://gist.githubusercontent.com/testuser/${gist.id}/raw/${name}`
+  const base = process.env.FAKE_GH_RAW_BASE ?? 'https://gist.githubusercontent.com/testuser'
+  return `${base}/${gist.id}/raw/${name}`
 }
 
 /**
@@ -99,7 +102,13 @@ function project(gist) {
   }
 }
 
-/** Resolve a `gist.githubusercontent.com/<user>/<id>/raw/<name>` URL back to its content. */
+/**
+ * Resolve a `gist.githubusercontent.com/<user>/<id>/raw/<name>` URL back to its content.
+ *
+ * Nothing in the plugin routes a raw URL through `gh` any more — a truncated file
+ * is fetched directly — so this branch now documents what `gh api <url>` would
+ * have answered, and keeps the double faithful to the real CLI.
+ */
 function serveRaw(url) {
   const parsed = new URL(url)
   const parts = parsed.pathname.split('/').filter(Boolean)

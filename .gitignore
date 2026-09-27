@@ -13,6 +13,9 @@ backups/
 .DS_Store
 Thumbs.db
 
+# git worktrees created inside the repository by `git worktree add`
+.worktrees/
+
 # logs
 *.log
 npm-debug.log*

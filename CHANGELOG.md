@@ -10,7 +10,50 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Nothing yet.
+Defects found by a re-review of the fixes below
+([issue #1](https://github.com/soimy/dsh-gist-settings/issues/1)). Each one is pinned by a case in
+`test/safety.test.mjs` that fails if the fix is reverted.
+
+### Fixed
+
+- **Tracked-file paths could still leave the profile directory.** Containment covered
+  `profiles/<name>` but not the files inside it, so a `profileFiles` entry of
+  `../../some-secret-file` — or a tracked file that was itself a link out of the tree, or that sat
+  under a linked subdirectory — was read and published by an upload and overwritten by a download.
+  Every name is now validated as a plain relative path, and every segment of its resolved path is
+  checked against the profile root. Nested names such as `config/app.yml` are still supported.
+- **A failed download could leave the profile at a revision that existed nowhere.** Files were written
+  one at a time, so a failure after the first left a mixture of old and new content. Content is now
+  staged inside the profile directory and measured before anything tracked is touched, then renamed
+  into place one file at a time, and a failure puts the already-replaced files back.
+- **`gist_upload(force: true)` did not perform the deletion it documented.** The flag suppressed the
+  refusal and then left the gist's copy exactly where it was. It now removes those files too, and the
+  result names them so the two deletion cases are never confused.
+- **A profile whose directory had been deleted outright was invisible** to bulk status, download and
+  sync, because the candidate list came from the directory listing alone — which is precisely the
+  disaster-recovery case those operations exist for. Bulk operations now also consider the profiles the
+  state file still tracks.
+- **One `gist_sync` did not converge after a remote deletion.** A tracked file deleted from the gist
+  is still never deleted locally, but sync now puts the local copy back into the gist in the same call
+  instead of leaving the profile reporting local changes until a second one.
+- **The state lock was process-local**, so two Harness hosts sharing a `stateDir` could each drop the
+  other's record — untracking a profile and orphaning its gist — or mint two gists for one profile. A
+  lock file now names the owning pid, a lock whose owner has exited is reclaimed at once, and a nested
+  call is refused with a clear error rather than deadlocking.
+- **Truncated gist content was fetched with `gh api <raw_url>`.** That command is documented as taking
+  an API endpoint, and it would carry the caller's token to a host gh was never configured for. The
+  URL is fetched directly now, and the live suite round-trips a 1.5 MB file to prove the path against
+  real GitHub.
+- `backupProfile` did not create intermediate directories, so a nested tracked file made the backup
+  fail and took the whole download with it.
+- A tracked file whose parent was a regular file surfaced a bare `ENOTDIR` instead of being reported
+  as absent, which hid the real cause from the error the user eventually saw.
+
+### Added
+
+- `test/safety.test.mjs` — the guarantees the README makes, one case per finding above, plus the
+  cross-process lock.
+- The live suite now covers a file above the API's 1 MB truncation threshold.
 
 ## [0.1.0] - 2026-09-27
 

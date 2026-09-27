@@ -14,13 +14,13 @@
 | 同步引擎（`lib/core.js`） | 已完成 |
 | Host 插件 + 4 个 agent 工具 | **已安装并生效**，可在会话中调用 |
 | 真实 GitHub 往返 | **已在真实账号上验证** |
-| 测试 | **116 项离线用例 + 10 项真实用例**，全部通过 |
+| 测试 | **五套共 134 项离线用例，另有 11 项真实用例**，全部通过 |
 | Client 设置页 | 尚未开始 —— 见[设置页](#设置页) |
 | 许可证 | MIT |
 
-这份代码经过了一轮对抗性审核（独立的安全性、正确性、集成、变异测试与文档审计）。审核中
-被证实的缺陷都已修复，并由回归测试锁定；下面的[安全模型](#安全模型)描述的是**修复之后的实际
-行为**，而不是最初的设计意图。
+这份代码经过了两轮对抗性审核（先是独立的安全性、正确性、集成、变异测试与文档审计，随后是针对
+修复结果的复审）。审核中被证实的缺陷都已修复，并由回归测试锁定；下面的[安全模型](#安全模型)
+描述的是**修复之后的实际行为**，而不是最初的设计意图。
 
 ## 环境要求
 
@@ -74,8 +74,8 @@ plugin_manager  action: remove_bundle  target: @local/dsh-gist-settings
 |---|---|---|
 | `gist_status` | — | 报告 `gh` 是否已安装并登录，然后列出每个 profile 及其 gist URL 与同步状态。不会改动 profile 文件或 gist；但可能会修复自身状态文件里陈旧的同步基线。 |
 | `gist_upload` | 本地 → gist | 首次上传时创建 secret gist，之后更新同一个 gist。**会删除 gist 上不再被追踪的文件** —— 见下方警告。绝不修改本地文件。 |
-| `gist_download` | gist → 本地 | 从 gist 恢复本地文件。覆盖前会先备份现有本地文件。 |
-| `gist_sync` | 双向 | 哪边变了就快进哪边；本地被误删的受追踪文件会被恢复；两边一致时什么都不做。真正的分叉会拒绝猜测。 |
+| `gist_download` | gist → 本地 | 从 gist 恢复本地文件。覆盖前会先备份现有本地文件，且写入是"全有或全无"。 |
+| `gist_sync` | 双向 | 哪边变了就快进哪边；本地被误删的受追踪文件会被恢复；两边一致时什么都不做。真正的分叉会拒绝猜测，且绝不传播删除操作。 |
 
 四个工具都接受可选的 `profile` 参数；省略即对所有 profile 生效。**某个 profile 失败不会中断
 其他 profile。** 所有参数都会被类型校验 —— 类型错误或未知键名会直接报错，绝不静默转换，
@@ -107,7 +107,8 @@ macOS 上它们是同一个目录，两者都接受就会把同一个 profile �
 > 文件（比如通过 GitHub 网页界面）**会**在下一次上传时被删除。
 >
 > 而"受追踪文件只是本地缺失"是另一回事：上传会**直接失败**并提示你去下载，因为 gist 上那份
-> 可能已是仅存的副本。`force: true` 会覆盖这一保护，把它也从 gist 上删掉。
+> 可能已是仅存的副本。`force: true` 会覆盖这一保护，把它也从 gist 上删掉 —— 结果里会列出被删掉
+> 的文件名，因此这两种情况永远不会混淆。
 
 ## 配置
 
@@ -121,6 +122,11 @@ macOS 上它们是同一个目录，两者都接受就会把同一个 profile �
 | `dshHome` | `$DSH_HOME`，否则 `~/.dsh` | Harness 主目录。开头的 `~` 会被展开，相对路径会基于进程工作目录解析。 |
 | `profilesDir` | `<dshHome>/profiles` | profile 所在目录。 |
 | `stateDir` | `<dshHome>/gist-settings` | gist 索引与备份的写入位置。 |
+
+`profileFiles` 的每个条目同时是 gist 里的文件名和备份目录里的路径，因此它必须是纯相对路径：
+不能含 `..`、不能是绝对路径或盘符相对路径、不能含冒号，也不能出现两个只差分隔符的条目。
+反斜杠会被接受并规范化为 `/`，从而保证各平台上写入 gist 的只有一种拼写。任何根本无法处理的
+名字都会在**插件加载时**被拒绝，而不是拖到第一次工具调用。
 
 插件没有声明 `Config` schema，而是在加载时自行校验：未知键名会被拒绝并列出全部合法键名，
 类型错误会被拒绝而不是静默回退到默认值。因此一个笔误会**明确报错**，而不是悄悄改变被备份的文件。
@@ -143,16 +149,40 @@ macOS 上它们是同一个目录，两者都接受就会把同一个 profile �
 **本地缺失的受追踪文件是"恢复"而不是"删除"。** 它有自己的状态；同步会把它下载回来，上传则
 在没有 `force` 时拒绝执行。这是工具绝不自行替用户决定的一处不对称，因为 gist 上那份可能是仅存的副本。
 
-**破坏性写入前先备份。** `gist_download` 在覆盖任何东西之前，会把该 profile 被追踪的文件复制到
-`<stateDir>/backups/<profile>/<时间戳>/`，即使使用了 `force` 也一样。备份发生在第一次写入之前，
-因此被取消或失败的下载不会让 profile 处于半改状态。
+**破坏性写入前先备份，且写入是"全有或全无"。** `gist_download` 在覆盖任何东西之前，会把该
+profile 被追踪的文件复制到 `<stateDir>/backups/<profile>/<时间戳>/`，即使使用了 `force` 也一样。
+新内容随后会先写进 profile 目录下的暂存区并逐个核对字节数，全部落盘后才逐个 rename 就位 ——
+每个文件一次原子 rename，落地的要么是旧内容、要么是新内容，绝不会是截断的混合体。若某个 rename
+仍然失败，已经替换掉的文件会用与备份相同的内容还原回去，报错也会说明这一点并给出备份目录。
+因此失败的下载会让 profile 保持原样，而不是停在一个哪边都不存在的版本上。
 
-**目录包容。** profile 名称按框架自身的规则校验，解析出的目录还会与 `realpath(profilesDir)`
-再核对一次。放在 `profiles/<名称>` 处的 junction 或符号链接会被**拒绝**而不是跟随，因此工具
-无法读写 profiles 目录之外的内容。
+**目录包容 —— 既管 profile，也管每一个受追踪文件。** profile 名称按框架自身的规则校验，解析出
+的目录还会与 `realpath(profilesDir)` 再核对一次。放在 `profiles/<名称>` 处的 junction 或符号
+链接会被**拒绝**而不是跟随。每个受追踪文件享受同样的待遇：`profileFiles` 条目必须是纯相对路径
+（无 `..`、无盘符、无保留字符），且解析出的路径**每一段**都会与 profile 根目录核对 —— 因此一个
+本身指向树外的受追踪文件，或位于被链接出去的子目录下的文件，都会被拒绝，而不是被读取或覆盖。
+`config/app.yml` 这类安全的嵌套名字依然受支持。
+
+**删除操作绝不自行传播，两个方向都是。** 手工从 gist 上删掉一个受追踪文件，不会把它从本地删掉：
+下载会保留它，而且 `gist_sync` 会在**同一次调用**里把它放回 gist，因此一次同步就能到达稳定状态，
+而不会在一次"声称已完成"的同步之后仍显示 `local changes to upload`。反过来，在本地删掉它也不会
+从 gist 上删掉：上传会拒绝执行。两者都可以覆盖，但只能是有意为之 —— 用 `gist_upload` 的
+`force: true` 处理 gist 上那份，用 `gist_download` 的 `force: true` 处理本地那份。
+
+**同一时刻只有一个写入者，且跨进程生效。** 对 `state.json` 的"读取-修改-写回"由进程内的队列
+**和**一个锁文件（`<stateDir>/state.lock`，其中记录持有者的 pid）共同串行化。因此共享同一状态
+目录的两个 Harness 宿主会排队而不是互相覆盖 —— 没有这层保护时的故障形态是丢失某条 profile 记录
+（等于取消追踪并把它对应的 gist 变成孤儿），或者为同一个 profile 建出两个 gist。持有者进程已经
+退出的锁会被立刻回收；另一台机器持有的锁则按时间老化。嵌套加锁会得到明确报错，而不是死锁。
 
 **绝不启动交互式编辑器。** gist 的读写全走 `gh api`。显而易见的替代方案 `gh gist edit` 会拉起
 `$EDITOR`，在无人值守的插件宿主里会直接挂住。
+
+**大文件会完整取回。** 超过 1 MB 的 gist 文件，其 `content` 在 API 响应里会被截断，剩余部分由
+`raw_url` 指路。该 URL 会先校验为 https 的 GitHub raw 主机，然后**直接**取回，而不走 `gh api` ——
+后者按文档只接受 API endpoint，并且会把调用方的 token 带到一个它从未被配置过的主机。这次请求
+不携带任何凭据，这正是它能成功的原因：secret gist 是"不公开列出"，而不是"访问受控"。
+`test/live.test.mjs` 会用 1.5 MB 的文件对真实 GitHub 做一次往返来证明这一点。
 
 **不 import Harness 安装目录里的任何东西。** 工具定义是按 `defineTool` 的产物形状手写的普通
 对象。这让 bundle 不受模块解析方式变化的影响；`test/schema.test.mjs` 会重放 Harness **自带**的
@@ -171,24 +201,25 @@ cordis.patch.yml       bundle 补丁（插入插件行；并记录配置说明�
 client.js              Client 设置页（尚未编写）
 locale/{en,zh}.json    Plugin Manager 卡片用的展示元数据
 icon.svg               bundle 图标
-test/                  四套共 116 项离线用例，另有 10 项真实用例
+test/                  五套共 134 项离线用例，另有 11 项真实用例
 ```
 
 ## 开发
 
 ```bash
-npm test                # 四套离线用例（116 项）
+npm test                # 五套离线用例（134 项）
 npm run test:sync       # 用假 gh 跑引擎完整生命周期
 npm run test:tools      # 工具层、参数校验、故障隔离
 npm run test:schema     # 定义 vs. Harness 自带校验器
 npm run test:regression # 对抗性审核发现的具体缺陷
+npm run test:safety     # 目录包容、原子写入、强制删除、灾难恢复、跨进程锁
 npm run test:live       # 需显式开启：真实 GitHub
 ```
 
 `test/fake-gh.mjs` 是 `gh` 的内存替身，实现了 `--version`、`auth status` 和 `/gists` 接口，并可选
-注入"截断文件""HTTP 500""未登录的 CLI"。`sync`、`tools`、`regression` 三套把 `ghPath` 指向它，
-因此整个生命周期 —— 创建、上传、下载、分叉、备份、清理、gist 重建、幂等、恢复 —— 都能在
-无网络、无 GitHub 账号的情况下跑完。
+注入"截断文件""不可信的 `raw_url` 主机""HTTP 500""未登录的 CLI"。`sync`、`tools`、`regression`、
+`safety` 四套把 `ghPath` 指向它，因此整个生命周期 —— 创建、上传、下载、分叉、备份、清理、gist
+重建、幂等、恢复 —— 都能在无网络、无 GitHub 账号的情况下跑完。
 
 `test/schema.test.mjs` 会从 `process.execPath` 定位已安装的 `@deepseek-ai/dsh-tools`
 （可用 `DSH_TOOLS_DIR` 覆盖），并重放运行时的检查：注册契约、受支持的 JSON Schema 子集、
@@ -196,7 +227,9 @@ npm run test:live       # 需显式开启：真实 GitHub
 静默跳过会让 `npm test` 全绿但一个校验都没跑；想刻意接受跳过可设 `DSH_ALLOW_SCHEMA_SKIP=1`。
 
 `test/live.test.mjs` 需要**显式开启**，因为它会创建真实的 secret gist。它在系统临时目录下使用
-一次性的 `DSH_HOME`，因此不会读写你的真实 profile；即使断言失败，它也会删除自己创建的 gist。
+一次性的 `DSH_HOME`，因此不会读写你的真实 profile；即使断言失败，它也会删除自己创建的**每一个**
+gist。除 `gh api` 往返之外，它还覆盖了假替身无法作证的那条路径：被真实 GitHub 在 JSON 响应里
+截断的 1.5 MB 文件，能否从 API 给出的 `raw_url` 完整取回。
 
 ```powershell
 $env:DSH_GIST_LIVE_TEST='1'; npm run test:live     # PowerShell
@@ -240,3 +273,9 @@ bundle 安装。这与 MIT 许可证并不冲突。
 
 审核同时确认了几件事本来就是正确的：注册契约、effect 与销毁生命周期、manifest，以及两侧哈希
 同一文件集时的分叉分类器。
+
+第二轮审核（[issue #1](https://github.com/soimy/dsh-gist-settings/issues/1)）复查了上述修复，
+发现那些防线都**早停了一层**：profile 目录做了包容，但目录里的受追踪文件没有；下载仍可能半途
+生效；`force: true` 被接受却被忽略；目录被整个删掉的 profile 对任何批量操作都不可见；远端删除
+后一次同步无法收敛；状态锁只在本进程内有效；截断内容仍通过 `gh api` 在未证实的假设上取回。
+这七项已全部修复，`test/safety.test.mjs` 为每一项都钉了一条"修复被回退就会失败"的用例。

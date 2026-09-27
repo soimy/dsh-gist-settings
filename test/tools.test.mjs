@@ -231,6 +231,28 @@ await check('gist_sync restores a profile whose tracked files were deleted local
   assert.ok(restored.includes('cordis.patch.yml'), 'the restored file must be back on disk')
 })
 
+/* ------------------------------------------------------- config validation -- */
+
+await check('apply() refuses a profileFiles entry that could leave the profile', async () => {
+  // At load time, not first use: a config that can never work has to say so while
+  // the plugin is being installed, when the person who typed it is still looking.
+  assert.throws(
+    () => apply({ ...ctx, tools: { register: () => () => {} }, effect: () => () => {} }, {
+      dshHome: root,
+      profileFiles: ['cordis.patch.yml', '../../outside.txt'],
+    }),
+    /invalid tracked file name/,
+  )
+  assert.throws(
+    () =>
+      apply({ ...ctx, tools: { register: () => () => {} }, effect: () => () => {} }, {
+        dshHome: root,
+        profileFiles: ['config\\app.yml', 'config/app.yml'],
+      }),
+    /duplicate tracked file name/,
+  )
+})
+
 /* ----------------------------------------------------------------- summary -- */
 
 const failed = results.filter((ok) => !ok).length

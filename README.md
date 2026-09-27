@@ -16,14 +16,14 @@ guarded two-way sync are exposed as agent tools, so you can drive them from a co
 | Sync engine (`lib/core.js`) | Done |
 | Host plugin + agent tools | **Installed and live**; callable from a session |
 | Real GitHub round-trip | **Verified** against a real account |
-| Test suite | **116 offline cases + 10 live cases**, all passing |
+| Test suite | **134 offline cases across five suites, plus 11 live cases**, all passing |
 | Client settings page | Not started — see [The settings page](#the-settings-page) |
 | Licence | MIT |
 
-This code has been through an adversarial review (independent security, correctness, integration,
-mutation-testing and documentation audits). Everything they proved is fixed and pinned by a
-regression test; the [safety model](#the-safety-model) below describes the resulting behaviour
-rather than the original intent.
+This code has been through two rounds of adversarial review (independent security, correctness,
+integration, mutation-testing and documentation audits, then a re-review of the fixes). Everything
+they proved is fixed and pinned by a regression test; the [safety model](#the-safety-model) below
+describes the resulting behaviour rather than the original intent.
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the issue, pull-request and
 changelog conventions, and [CHANGELOG.md](CHANGELOG.md) for what has changed.
@@ -82,8 +82,8 @@ the plugin has taken. Deleting it loses the mapping and the local backups, but n
 |---|---|---|
 | `gist_status` | — | Reports whether `gh` is installed and authenticated, then lists every profile with its gist URL and sync state. Never touches profile files or the gist; it may repair a stale sync baseline in its own state file. |
 | `gist_upload` | local → gist | Creates a secret gist on a profile's first upload, then updates that same gist. **Removes gist files that are no longer tracked** — see the warning below. Never modifies local files. |
-| `gist_download` | gist → local | Restores local files from the gist. Backs up the existing local files first. |
-| `gist_sync` | both | Fast-forwards whichever side changed, restores tracked files that went missing locally, and does nothing when both sides match. Refuses to guess on a true divergence. |
+| `gist_download` | gist → local | Restores local files from the gist. Backs up the existing local files first, and writes all-or-nothing. |
+| `gist_sync` | both | Fast-forwards whichever side changed, restores tracked files that went missing locally, and does nothing when both sides match. Refuses to guess on a true divergence, and never propagates a deletion. |
 
 All four accept an optional `profile`; omitting it operates on every profile. A failure on one
 profile never aborts the others. Every argument is type-checked — a wrong type or an unknown key is
@@ -116,7 +116,8 @@ files".
 > file added to the gist by hand (through the GitHub web UI, say) *will* be removed by the next
 > upload. A tracked file that is only missing locally is a different case: the upload **fails** and
 > tells you to download instead, because the gist may hold the only remaining copy. `force: true`
-> overrides that and deletes it from the gist too.
+> overrides that and deletes it from the gist too — and the result says which files it deleted, so the
+> two cases are never confused.
 
 ## Configuration
 
@@ -131,6 +132,12 @@ in this repo's `cordis.patch.yml` is the template):
 | `dshHome` | `$DSH_HOME`, else `~/.dsh` | Harness home directory. A leading `~` is expanded and relative values are resolved against the process working directory. |
 | `profilesDir` | `<dshHome>/profiles` | Where profiles live. |
 | `stateDir` | `<dshHome>/gist-settings` | Where the gist index and backups are written. |
+
+Each `profileFiles` entry is also the file's name in the gist and its path inside a backup, so it has
+to be a plain relative path: no `..`, no absolute or drive-relative prefix, no colon, and no two
+entries that differ only in their separator. Backslashes are accepted and canonicalised to `/`, so one
+spelling reaches the gist from every platform. A name that could never be handled is rejected while
+the plugin loads, rather than on the first tool call.
 
 The plugin declares no `Config` schema, so it validates the block itself at load time: an unknown key
 is rejected with the list of known keys, and a wrong type is rejected rather than silently falling
@@ -157,18 +164,48 @@ extra file in the gist cannot make a profile look permanently out of date.
 downloads it, and an upload refuses without `force`. This is the one asymmetry the tools never
 resolve on their own, because the gist may hold the only copy.
 
-**Backups before destructive writes.** `gist_download` copies the profile's tracked files to
-`<stateDir>/backups/<profile>/<timestamp>/` before overwriting anything, including when forced. The
-backup is taken before the first write, so a cancelled or failed download leaves the profile
-untouched.
+**A deletion is never propagated on its own, in either direction.** Deleting a tracked file from the
+gist by hand does not delete it locally: the download keeps it, and `gist_sync` puts it back into the
+gist in the same call, so one sync reaches a stable state instead of leaving the profile reporting
+`local changes to upload` after a sync that claimed to have finished. Deleting it locally does not
+delete it from the gist either: the upload refuses. Both are overridable, but only deliberately —
+`gist_upload` with `force: true` for the gist's copy, `gist_download` with `force: true` for the local
+one.
 
-**Containment.** Profile names are validated against the framework's own rules, and the resolved
-directory is re-checked against `realpath(profilesDir)`. A junction or symlink placed at
-`profiles/<name>` is refused rather than followed, so the tools cannot read or write outside the
-profiles directory.
+**Backups before destructive writes, and an all-or-nothing write.** `gist_download` copies the
+profile's tracked files to `<stateDir>/backups/<profile>/<timestamp>/` before overwriting anything,
+including when forced. New content is then staged inside the profile directory and measured, and only
+once every byte has landed is it renamed into place: one atomic rename per file, which is either the
+old content or the new one and never a truncated mixture. If a rename still fails, the files already
+replaced are put back from the same bytes the backup holds, and the error says so and names the backup
+directory. A failed download therefore leaves the profile exactly as it was, rather than at a revision
+that exists nowhere.
+
+**Containment — for the profile, and for every tracked file.** Profile names are validated against the
+framework's own rules, and the resolved directory is re-checked against `realpath(profilesDir)`. A
+junction or symlink placed at `profiles/<name>` is refused rather than followed. Each tracked file gets
+the same treatment: a `profileFiles` entry must be a relative path with no `..`, no drive letter and no
+reserved character, and every segment of the resolved path is checked against the profile root — so a
+tracked file that is itself a link out of the tree, or that sits under a linked subdirectory, is
+refused instead of being read or overwritten. Safe nested names such as `config/app.yml` are supported.
+
+**One writer at a time, across processes.** Read-modify-write cycles over `state.json` are serialised
+by an in-process queue *and* by a lock file (`<stateDir>/state.lock`) naming the pid that owns it. Two
+Harness hosts sharing one state directory therefore queue rather than lose each other's updates — the
+failure mode without it being a dropped profile record, which untracks a profile and orphans its gist,
+or two gists minted for one profile. A lock whose owner has exited is reclaimed at once; one held by
+another machine ages out of staleness. A nested call is refused with a clear error rather than
+deadlocking.
 
 **No interactive editor, ever.** Gist reads and writes go through `gh api`. The obvious alternative,
 `gh gist edit`, opens `$EDITOR` and would hang a non-interactive plugin host.
+
+**A large file comes back whole.** GitHub truncates a gist file's `content` in the API response above
+1 MB and names the remainder at `raw_url`. That URL is validated to be a GitHub raw host over https and
+then fetched directly, rather than through `gh api` — which is documented as taking an API endpoint,
+and would carry the caller's token to a host it was never configured for. No credentials are sent for
+this request, which is why it works: a secret gist is unlisted, not access-controlled.
+`test/live.test.mjs` round-trips a 1.5 MB file against real GitHub to prove it.
 
 **No imports from the Harness installation.** Tool definitions are written as plain objects matching
 the shape `defineTool` produces. This keeps the bundle immune to module-resolution changes;
@@ -189,7 +226,7 @@ cordis.patch.yml       Bundle patch (inserts the plugin row; documents config)
 client.js              Client settings page (not yet written)
 locale/{en,zh}.json    Plugin display metadata for Plugin Manager cards
 icon.svg               Bundle icon
-test/                  116 offline cases across four suites, plus 10 live ones
+test/                  134 offline cases across five suites, plus 11 live ones
 scripts/               check-changelog.mjs — validates CHANGELOG.md
 .github/               Issue forms and the pull-request template
 ```
@@ -206,20 +243,21 @@ scripts/               check-changelog.mjs — validates CHANGELOG.md
 ## Development
 
 ```bash
-npm test                # the four offline suites (116 cases) plus the changelog check
+npm test                # the five offline suites (134 cases) plus the changelog check
 npm run test:sync       # engine lifecycle against a fake gh
 npm run test:tools      # tool layer, argument validation, failure isolation
 npm run test:schema     # definitions vs. the installed Harness validators
-npm run test:regression # the defects the adversarial review found
+npm run test:regression # the defects the adversarial reviews found
+npm run test:safety     # containment, atomic writes, forced deletion, recovery, locking
 npm run changelog:check # CHANGELOG.md structure and version consistency
 npm run test:live       # opt-in: real GitHub
 ```
 
 `test/fake-gh.mjs` is an in-memory stand-in for `gh` implementing `--version`, `auth status`, and the
-`/gists` API, with optional injection of truncated files, HTTP 500s and a logged-out CLI. The `sync`,
-`tools` and `regression` suites point `ghPath` at it, so the whole lifecycle — create, upload,
-download, divergence, backup, pruning, gist recreation, idempotency, recovery — runs offline with no
-GitHub account.
+`/gists` API, with optional injection of truncated files, an untrusted `raw_url` host, HTTP 500s and a
+logged-out CLI. The `sync`, `tools`, `regression` and `safety` suites point `ghPath` at it, so the
+whole lifecycle — create, upload, download, divergence, backup, pruning, gist recreation, idempotency,
+recovery — runs offline with no GitHub account.
 
 `test/schema.test.mjs` locates the installed `@deepseek-ai/dsh-tools` from `process.execPath`
 (override with `DSH_TOOLS_DIR`) and replays the runtime's own checks: the registration contract, the
@@ -229,8 +267,10 @@ silent skip would leave `npm test` green with none of those checks having run; s
 `DSH_ALLOW_SCHEMA_SKIP=1` to accept the skip deliberately.
 
 `test/live.test.mjs` is **opt-in** because it creates a real secret gist. It works inside a throwaway
-`DSH_HOME` under the OS temp directory, so no real profile is read or written, and it deletes the gist
-it created even when an assertion fails.
+`DSH_HOME` under the OS temp directory, so no real profile is read or written, and it deletes every
+gist it created even when an assertion fails. Besides the `gh api` round trip it covers the one path a
+fake cannot vouch for: a 1.5 MB file, which real GitHub truncates in the JSON response, coming back
+whole from the `raw_url` the API named.
 
 ```powershell
 $env:DSH_GIST_LIVE_TEST='1'; npm run test:live     # PowerShell
@@ -278,3 +318,11 @@ those are fixed and covered by `test/regression.test.mjs`, whose cases are writt
 is reverted. The review also confirmed several things were already sound: the registration contract,
 the effect and disposal lifecycle, the manifest, and the divergence classifier when both sides hash
 the same file set.
+
+A second review ([issue #1](https://github.com/soimy/dsh-gist-settings/issues/1)) re-examined those
+fixes and found the guards stopped one level too early: the profile directory was contained but the
+tracked files inside it were not, a download could still half-apply, `force: true` was accepted and
+then ignored, a profile whose directory had been deleted was invisible to every bulk operation, one
+sync did not converge after a remote deletion, the state lock was process-local, and truncated content
+was fetched through `gh api` on an undocumented assumption. All seven are fixed, and
+`test/safety.test.mjs` pins each one with a case that fails if the fix is reverted.
