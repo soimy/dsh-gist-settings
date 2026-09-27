@@ -21,7 +21,8 @@
     "test": "node test/sync.test.mjs && node test/tools.test.mjs && node test/schema.test.mjs",
     "test:sync": "node test/sync.test.mjs",
     "test:tools": "node test/tools.test.mjs",
-    "test:schema": "node test/schema.test.mjs"
+    "test:schema": "node test/schema.test.mjs",
+    "test:live": "node test/live.test.mjs"
   },
   "dsh": {
     "bundle": {

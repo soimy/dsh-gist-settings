@@ -13,8 +13,8 @@ guarded two-way sync are exposed as agent tools, so you can drive them from a co
 |---|---|
 | Sync engine (`lib/core.js`) | Done — 19 tests |
 | Host plugin + agent tools | **Installed and live**; callable from a session |
+| Real GitHub round-trip | **Verified** — 10 live cases against a real account |
 | Client settings page | Not started — see [The settings page](#the-settings-page) |
-| Real GitHub round-trip | Pending `gh auth login` (see [Requirements](#requirements)) |
 
 ## Requirements
 
@@ -115,23 +115,37 @@ cordis.patch.yml      Bundle patch (inserts the plugin row; documents config)
 client.js             Client settings page (not yet written)
 locale/{en,zh}.json   Plugin display metadata for Plugin Manager cards
 icon.svg              Bundle icon
-test/                 48 tests across three suites
+test/                 58 tests across four suites
 ```
 
 ## Development
 
 ```bash
-npm test          # all three suites
-npm run test:sync # engine lifecycle against a fake gh
-npm run test:tools# tool layer against a fake gh
+npm test            # the three offline suites
+npm run test:sync   # engine lifecycle against a fake gh
+npm run test:tools  # tool layer against a fake gh
 npm run test:schema # definitions vs. the installed Harness validators
+npm run test:live   # opt-in: real GitHub, needs DSH_GIST_LIVE_TEST=1
 ```
 
 `test/fake-gh.mjs` is an in-memory stand-in for `gh` implementing `--version`, `auth status`, and the
 `/gists` API. The `sync` and `tools` suites point `ghPath` at it, so the whole lifecycle — create,
 upload, download, divergence, backup, pruning, gist recreation, idempotency — runs offline with no
-GitHub account. `test/schema.test.mjs` locates the installed `@deepseek-ai/dsh-tools` from
-`process.execPath` (override with `DSH_TOOLS_DIR`) and skips cleanly when absent.
+GitHub account.
+
+`test/schema.test.mjs` locates the installed `@deepseek-ai/dsh-tools` from `process.execPath`
+(override with `DSH_TOOLS_DIR`) and skips cleanly when absent.
+
+`test/live.test.mjs` is **opt-in** because it creates a real secret gist:
+
+```bash
+DSH_GIST_LIVE_TEST=1 npm run test:live
+```
+
+It works inside a throwaway `DSH_HOME` under the OS temp directory, so no real profile is read or
+written, and it deletes the gist it created even when an assertion fails. It covers what the fake
+cannot: that `gh api` really accepts our POST/PATCH/DELETE bodies, that a `PATCH` carrying a `null`
+file value really deletes that file, and that content survives a real round trip byte for byte.
 
 Because `install_bundle` links this directory into the profile, the working copy **is** the live
 plugin: edits to `index.js` and `lib/` take effect on reload.
