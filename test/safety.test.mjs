@@ -312,6 +312,9 @@ await check('a failed commit restores what it wrote and leaves an external edit 
     clearInterval(poller)
   }
 
+  // Without the injection this run exercised nothing, and saying so is the honest outcome.
+  if (!edited) return 'the external edit did not land on this run, so nothing was exercised'
+
   assert.ok(error, 'the commit must have failed')
   assert.match(error.message, /changed after this download wrote them/)
   assert.match(error.message, /a\.yml/)
@@ -320,7 +323,6 @@ await check('a failed commit restores what it wrote and leaves an external edit 
     'a.yml: EDITOR\n',
     'a revision written by someone else after this download is not ours to undo',
   )
-  if (!edited) return 'the external edit did not land on this run, so nothing was exercised'
   assert.equal(await read('rollback', 'f000.yml'), 'f000.yml: old\n', 'our own write must be rolled back')
 
   const leftovers = (await fs.readdir(dir)).filter((name) => name.startsWith('.dsh-gist-settings-staging-'))
@@ -1132,55 +1134,78 @@ await check('a raw request that fails at the transport falls back, and reports a
 
 /* --------------------------------------------------------- state write failure -- */
 
-await check('a download whose baseline cannot be recorded says the files are in place', async () => {
+await check('a baseline that cannot be recorded is reported honestly', async () => {
   await seed('unrecorded', { 'cordis.patch.yml': 's: v1\n' })
   const solo = { ...config, profileFiles: ['cordis.patch.yml'] }
   const uploaded = await core.uploadProfile('unrecorded', { ghPath, config: solo })
   await core.gistPatch(ghPath, uploaded.gistId, { files: { 'cordis.patch.yml': 's: v2\n' } })
 
-  // Make the state write fail while leaving it readable: on Windows by marking
-  // the file read-only, elsewhere by removing write permission from its directory.
+  // The state *lock* is created in the same directory as the state file, so how the
+  // write is blocked decides which failure this exercises, and the two platforms
+  // cannot be given the same one:
+  //
+  //   Windows — a read-only state file. The lock is unaffected and only the atomic
+  //   replace fails, which is the branch worth pinning: the commit has already
+  //   happened, so the report must say the files are in place rather than claiming
+  //   a lost download.
+  //
+  //   POSIX — no permission change can fail that replace, because rename(2) consults
+  //   the directory rather than the file; and a read-only directory fails the lock
+  //   first, before anything is fetched. The property forceable there is worth as
+  //   much: an unwritable state directory never half-applies anything.
+  //
+  // Both are deterministic, which is why neither is a timing trick: an injected
+  // change mid-operation would either need a race to land or fail on a loaded
+  // runner, and a case that skips proves nothing.
   const stateFile = path.join(stateDir, 'state.json')
-  const blockWrites = async () => {
-    if (process.platform === 'win32') await fs.chmod(stateFile, 0o444)
-    else await fs.chmod(stateDir, 0o555)
-  }
-  const allowWrites = async () => {
-    if (process.platform === 'win32') await fs.chmod(stateFile, 0o666)
-    else await fs.chmod(stateDir, 0o755)
-  }
+  const onWindows = process.platform === 'win32'
+  const block = () => (onWindows ? fs.chmod(stateFile, 0o444) : fs.chmod(stateDir, 0o555))
+  const unblock = () => (onWindows ? fs.chmod(stateFile, 0o666) : fs.chmod(stateDir, 0o755))
+  const downloadProblem = onWindows ? /files are in place/ : /EACCES|permission denied/i
+  const uploadProblem = onWindows ? /recording it in .* failed/ : /EACCES|permission denied/i
 
-  await blockWrites()
+  await block()
   try {
     await assert.rejects(
       () => core.downloadProfile('unrecorded', { ghPath, config: solo, force: true }),
-      /files are in place/,
-      'a failure after the commit must not be reported as a lost download',
+      downloadProblem,
+      onWindows
+        ? 'a failure after the commit must not be reported as a lost download'
+        : 'an unwritable state directory must fail before anything is written',
     )
   } finally {
-    await allowWrites()
+    await unblock()
   }
-
-  assert.equal(await read('unrecorded', 'cordis.patch.yml'), 's: v2\n', 'the download itself succeeded')
+  assert.equal(
+    await read('unrecorded', 'cordis.patch.yml'),
+    onWindows ? 's: v2\n' : 's: v1\n',
+    onWindows ? 'the download itself succeeded' : 'nothing may be downloaded',
+  )
   assert.deepEqual(
     (await fs.readdir(stateDir)).filter((name) => name.endsWith('.tmp')),
     [],
     'a half-written temp file must not be left behind',
   )
 
-  // The same for the upload direction: the gist really was updated, so the report
-  // has to say that rather than implying it was not.
+  // The same for the upload direction: on Windows the gist really was updated, so
+  // the report has to say that rather than implying it was not; on POSIX the gist
+  // must still hold the previous revision, because the lock is taken before
+  // anything is patched or created.
   await fs.writeFile(path.join(profileDir('unrecorded'), 'cordis.patch.yml'), 's: v3\n', 'utf8')
-  await blockWrites()
+  await block()
   try {
     await assert.rejects(
       () => core.uploadProfile('unrecorded', { ghPath, config: solo }),
-      /recording it in .* failed/,
+      uploadProblem,
+      onWindows ? 'the gist was updated, so the report must not imply otherwise' : 'nothing may be published',
     )
   } finally {
-    await allowWrites()
+    await unblock()
   }
-  assert.equal((await core.gistGet(ghPath, uploaded.gistId)).files['cordis.patch.yml'], 's: v3\n')
+  assert.equal(
+    (await core.gistGet(ghPath, uploaded.gistId)).files['cordis.patch.yml'],
+    onWindows ? 's: v3\n' : 's: v2\n',
+  )
   assert.deepEqual(
     (await fs.readdir(stateDir)).filter((name) => name.endsWith('.tmp')),
     [],

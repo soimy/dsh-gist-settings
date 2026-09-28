@@ -1,5 +1,7 @@
 # dsh-gist-settings
 
+[![CI](https://github.com/soimy/dsh-gist-settings/actions/workflows/ci.yml/badge.svg)](https://github.com/soimy/dsh-gist-settings/actions/workflows/ci.yml)
+
 **English** · [中文](README.zh-CN.md)
 
 A [DeepSeek Harness](https://github.com/deepseek-ai) Cordis plugin that backs up and restores your
@@ -16,7 +18,8 @@ guarded two-way sync are exposed as agent tools, so you can drive them from a co
 | Sync engine (`lib/core.js`) | Done |
 | Host plugin + agent tools | **Installed and live**; callable from a session |
 | Real GitHub round-trip | **Verified** against a real account |
-| Test suite | **159 offline cases across five suites, plus 12 live cases**, all passing |
+| Test suite | **180 offline cases across seven suites, plus 12 live cases**, all passing |
+| CI | Offline suites and repository checks on Linux, Windows and macOS, Node 20.3, 20.x, 22.x and 24.x |
 | Client settings page | Not started — see [The settings page](#the-settings-page) |
 | Licence | MIT |
 
@@ -30,8 +33,11 @@ changelog conventions, and [CHANGELOG.md](CHANGELOG.md) for what has changed.
 
 ## Requirements
 
-- **Node.js 20+** — the engine uses `node:`-prefixed built-ins, `AsyncLocalStorage` to catch a nested
-  lock, and the global `fetch` for truncated gist content.
+- **Node.js 20.3+** — the engine uses `node:`-prefixed built-ins, `AsyncLocalStorage` to catch a nested
+  lock, and `AbortSignal.any` to put one deadline on the global `fetch` that reads truncated gist
+  content. That last one is why the floor is 20.3 rather than 20.0: on 20.0–20.2 the plugin loads and
+  then fails the first time it has to read a file above the API's truncation threshold.
+  `.github/workflows/ci.yml` runs the suites on 20.3.0 itself, so the floor is tested rather than claimed.
 - **`gh` CLI, installed and authenticated.**
 
   ```bash
@@ -257,7 +263,7 @@ cordis.patch.yml       Bundle patch (inserts the plugin row; documents config)
 client.js              Client settings page (not yet written)
 locale/{en,zh}.json    Plugin display metadata for Plugin Manager cards
 icon.svg               Bundle icon
-test/                  159 offline cases across five suites, plus 12 live ones
+test/                  180 offline cases across seven suites, plus 12 live ones
 scripts/               check-changelog.mjs — validates CHANGELOG.md
 .github/               Issue forms and the pull-request template
 ```
@@ -274,7 +280,7 @@ scripts/               check-changelog.mjs — validates CHANGELOG.md
 ## Development
 
 ```bash
-npm test                # the five offline suites (159 cases) plus the changelog check
+npm test                # the seven offline suites (180 cases) plus the changelog and docs checks
 npm run test:sync       # engine lifecycle against a fake gh
 npm run test:tools      # tool layer, argument validation, failure isolation
 npm run test:schema     # definitions vs. the installed Harness validators

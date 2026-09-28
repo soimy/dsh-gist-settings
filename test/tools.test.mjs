@@ -254,14 +254,19 @@ await check('apply() refuses a profileFiles entry that could leave the profile',
     }),
     /invalid tracked file name/,
   )
-  assert.throws(
-    () =>
-      apply({ ...ctx, tools: { register: () => () => {} }, effect: () => () => {} }, {
-        dshHome: root,
-        profileFiles: ['package.json', 'PACKAGE.JSON'],
-      }),
-    /duplicate tracked file name/,
-  )
+  // Two spellings of one file are refused only where the filesystem folds case. On
+  // Linux `package.json` and `PACKAGE.JSON` really are two files, and refusing them
+  // would be wrong, so this half is pinned only where the rule applies.
+  if (process.platform === 'win32' || process.platform === 'darwin') {
+    assert.throws(
+      () =>
+        apply({ ...ctx, tools: { register: () => () => {} }, effect: () => () => {} }, {
+          dshHome: root,
+          profileFiles: ['package.json', 'PACKAGE.JSON'],
+        }),
+      /duplicate tracked file name/,
+    )
+  }
 })
 
 /* ----------------------------------------------------------------- summary -- */

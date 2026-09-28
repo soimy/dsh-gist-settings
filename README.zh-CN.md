@@ -1,5 +1,7 @@
 # dsh-gist-settings
 
+[![CI](https://github.com/soimy/dsh-gist-settings/actions/workflows/ci.yml/badge.svg)](https://github.com/soimy/dsh-gist-settings/actions/workflows/ci.yml)
+
 [English](README.md) · **中文**
 
 一款 [DeepSeek Harness](https://github.com/deepseek-ai) 的 Cordis 插件：借助你**已经装好并登录**的 `gh` 命令，把 Harness 的 **profile 配置**备份到 **GitHub Gist**，也能从 Gist 恢复。
@@ -14,7 +16,8 @@
 | 同步引擎（`lib/core.js`） | 已完成 |
 | Host 插件 + 4 个 agent 工具 | **已安装并生效**，可在会话中调用 |
 | 真实 GitHub 往返 | **已在真实账号上验证** |
-| 测试 | **五套共 159 项离线用例，另有 12 项真实用例**，全部通过 |
+| 测试 | **七套共 180 项离线用例，另有 12 项真实用例**，全部通过 |
+| CI | 在 Linux、Windows、macOS 上跑离线用例与仓库检查，覆盖 Node 20.3、20.x、22.x、24.x |
 | Client 设置页 | 尚未开始 —— 见[设置页](#设置页) |
 | 许可证 | MIT |
 
@@ -24,8 +27,10 @@
 
 ## 环境要求
 
-- **Node.js 20+** —— 引擎使用 `node:` 前缀的内置模块、用于识别嵌套加锁的 `AsyncLocalStorage`，以及
-  用于取回截断内容的全局 `fetch`。
+- **Node.js 20.3+** —— 引擎使用 `node:` 前缀的内置模块、用于识别嵌套加锁的 `AsyncLocalStorage`，以及
+  `AbortSignal.any`：读取被截断的 gist 内容时，它给全局 `fetch` 加上统一时限。下限是 20.3 而不是
+  20.0 正因如此：在 20.0–20.2 上插件能加载，但第一次需要读取超过 API 截断阈值的文件时就会失败。
+  `.github/workflows/ci.yml` 直接在 20.3.0 上跑测试，所以这个下限是被验证的，而不是被声称的。
 - **`gh` 命令，已安装并已登录。**
 
   ```bash
@@ -227,7 +232,7 @@ cordis.patch.yml       bundle 补丁（插入插件行；并记录配置说明�
 client.js              Client 设置页（尚未编写）
 locale/{en,zh}.json    Plugin Manager 卡片用的展示元数据
 icon.svg               bundle 图标
-test/                  五套共 159 项离线用例，另有 12 项真实用例
+test/                  七套共 180 项离线用例，另有 12 项真实用例
 scripts/               check-changelog.mjs —— 校验 CHANGELOG.md
 .github/               Issue 表单与 PR 模板
 ```
@@ -244,7 +249,7 @@ scripts/               check-changelog.mjs —— 校验 CHANGELOG.md
 ## 开发
 
 ```bash
-npm test                # 五套离线用例（159 项）
+npm test                # 七套离线用例（180 项），外加 CHANGELOG 与文档链接检查
 npm run test:sync       # 用假 gh 跑引擎完整生命周期
 npm run test:tools      # 工具层、参数校验、故障隔离
 npm run test:schema     # 定义 vs. Harness 自带校验器

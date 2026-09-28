@@ -16,8 +16,81 @@ pass over those fixes themselves. Most are pinned by `test/safety.test.mjs`; the
 cases live in `test/regression.test.mjs`, and the ones that can only be settled against real GitHub are
 in `test/live.test.mjs`. Every one of them fails if its fix is reverted.
 
+### Added
+
+- **Continuous integration.** `npm test` now runs on Linux, Windows and macOS at Node 20.x, 22.x and
+  24.x, plus one leg on 20.3.0 — the floor `engines` names. The platform matrix is not decoration: the
+  containment checks take a different path per OS (junctions and reserved device names on Windows,
+  Unicode normalisation on macOS, rename-over-a-file semantics everywhere), so a green Linux run says
+  nothing about what a Windows user gets. No install step is needed, because the package has no
+  dependencies and no lockfile; `fail-fast` is off so one platform's failure does not hide the others.
+  The live suite stays out of CI on purpose: it writes to a real GitHub account. A second job installs
+  the Harness version `peerDependencies` names and runs the schema suite against its real validators,
+  which no runner has by default; the matrix opts into that suite's explicit skip instead, so the skip
+  appears in the log rather than passing silently.
+- **A documentation check**, `npm run docs:check`, now part of `npm test`: it resolves every relative
+  link in every Markdown file, refuses one that points outside the repository, and requires the two
+  READMEs to link to each other. The rule that they stay in step was documented but unchecked.
+- **A release workflow.** `CONTRIBUTING.md` told a maintainer that pushing a `vX.Y.Z` tag generates the
+  GitHub release from the changelog section, and nothing did. `.github/workflows/release.yml` now
+  re-runs `npm test` on the tagged commit and publishes that version's section as the release notes.
+  `npm run release:notes -- vX.Y.Z` previews them, and refuses a tag that disagrees with `package.json`,
+  a version with no dated changelog section, and an empty one — writing nothing to stdout when it
+  refuses, so a failed run cannot publish a release with no notes.
+- **`npm run test:release`**, six cases for the release-notes script: the success path, and every way it
+  is meant to refuse a tag. It is the one script here that normally first runs on a tag push, which is
+  the worst moment to discover it accepts the wrong thing, so its refusals are checked on every push.
+- **`npm run test:docs`**, thirteen cases for the documentation checker: the destination shapes Markdown
+  allows (angle brackets, balanced parentheses, backslash escapes), the containment rule, and the
+  behaviours that already worked. Three of its cases pin defects that shipped — a truncated
+  angle-bracket path that let a broken link through, a balanced-parenthesis path that failed a good one,
+  and a link through an in-repo symlink that reached outside the repository.
+
 ### Fixed
 
+- **The release job left its write credential where the install could read it.** `actions/checkout`
+  persists the token into the local git config by default, and this job holds `contents: write` and then
+  installs an external dependency tree — with no lockfile to pin what that tree contains. An install
+  script inside it could have read a credential able to push to this repository. Every checkout now sets
+  `persist-credentials: false`; nothing needs it, because the publish step passes `GH_TOKEN` explicitly.
+- **The documentation check could not read a destination with Markdown escapes.** `[x](a\(1\).md)` means
+  the file `a(1).md`, but the scanner left the backslashes in the path it looked for, so an existing file
+  was reported as missing and `npm test` failed on a link that was fine. On Windows the stray backslash
+  also reads as a path separator, so the check was looking somewhere else entirely.
+- **The test double's flush limit could still return a truncated body as a success.** The wait added
+  earlier had a timeout that exited 0, so a body that had not reached the pipe would be handed back as a
+  successful response — the same truncation, only slower. Giving up now fails loudly and says so. The
+  wait lives in `test/stdout-flush.mjs` so that branch is driven directly by a test: staging a flush that
+  genuinely never completes is not portable, because on POSIX the writer queues the rest and carries on
+  while on Windows a full pipe blocks the writing thread, and the test can only hang.
+- **The release job could not have published anything.** It ran `npm test`, which includes
+  `test/schema.test.mjs` — and that suite fails, by design, when it cannot find an installed Harness.
+  The matrix gets away with it by opting into the skip and letting a separate job run the contract; the
+  release job had neither, so the first `v*` tag anybody pushed would have died in `npm test` before it
+  generated the notes. Both jobs now install the Harness through one shared composite action, so the
+  release job runs the schema contract for real rather than taking the matrix's skip.
+- **The test double could truncate its own output.** `test/fake-gh.mjs` wrote a body and then called
+  `process.exit(0)`, and exit does not wait for a write to a pipe. This double answers `GET /gists/<id>`
+  and a raw URL with the whole payload — hundreds of kilobytes for the suites that track a few hundred
+  files, and 1.5 MB for the live truncation case, both well past the 64 KiB pipe buffer — so the body
+  arrived cut short now and then, which core reported as `gh returned non-JSON output` and which read
+  like a defect in the plugin. Those paths now wait for the write to drain before exiting, which also
+  required them to be awaited: `process.exit()` never returns, so a replacement that does would let the
+  request handling run on and answer a second time.
+- **The documentation check both missed links and failed on good ones.** Destinations wrapped in angle
+  brackets (`[x](<a b.md>)`) were truncated at the space, so a link to nothing passed unchecked, and
+  destinations containing balanced parentheses (`[x](a(1).md)`) were cut at the first `)`, so a link to a
+  file that exists failed `npm test`. Containment was also compared against the spelled path, so a link
+  through a symlink inside the repository reached a file outside it and satisfied the rule that says it
+  cannot. Destinations are now scanned rather than matched, and containment compares real paths.
+- **The release-notes script accepted an empty section.** When the tagged version was the last section in
+  the file, extraction ran on into the link definitions below it, so a section with no entries of its own
+  looked non-empty and those definitions would have been published as the release notes.
+- **`engines` claimed Node 20.0.0; the code needs 20.3.0.** `AbortSignal.any`, which puts one deadline
+  on the `fetch` that reads truncated gist content, arrived in 20.3. On 20.0–20.2 the plugin therefore
+  loaded and then failed the first time it read a file above the API's truncation threshold. The floor
+  is now 20.3.0, both READMEs say so, and CI runs a leg on 20.3.0 itself, so the claim is tested rather
+  than asserted.
 - **A tracked file named `rollback` could abort the whole rollback.** The restore copies went into a fixed
   `rollback` subdirectory of the staging directory, so a profile tracking a file by that name — one not
   yet committed, whose staged copy still occupied the path — made creating that directory throw. Every

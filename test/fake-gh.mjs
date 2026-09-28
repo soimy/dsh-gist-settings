@@ -26,6 +26,8 @@
 
 import fs from 'node:fs'
 
+import { flushThenExit } from './stdout-flush.mjs'
+
 const STORE = process.env.FAKE_GH_STORE
 if (!STORE) {
   process.stderr.write('FAKE_GH_STORE is not set\n')
@@ -62,6 +64,21 @@ async function readStdin() {
 
 function out(value) {
   process.stdout.write(typeof value === 'string' ? value : `${JSON.stringify(value, null, 2)}\n`)
+}
+
+/**
+ * Exit once the response body has actually reached the pipe.
+ *
+ * The waiting, the limit and the refusal to exit 0 on a body that was not delivered
+ * live in `stdout-flush.mjs`, which is a module so that branch can be tested
+ * directly. Must be awaited, and used only where a body was just written:
+ * `process.exit()` never returns, so replacing it with something that does would let
+ * the request handling run on and answer a second time. The error paths keep the
+ * immediate exit, because their messages are a few bytes and a write that small
+ * cannot be split.
+ */
+async function drainThenExit(code = 0) {
+  await flushThenExit({ code })
 }
 
 function fail(message, code = 1) {
@@ -113,7 +130,7 @@ function project(gist) {
  * is fetched directly — so this branch now documents what `gh api <url>` would
  * have answered, and keeps the double faithful to the real CLI.
  */
-function serveRaw(url) {
+async function serveRaw(url) {
   if (process.env.FAKE_GH_FAIL_RAW === '1') fail(`fake gh: HTTP 502: Bad Gateway (${url})`)
   const parsed = new URL(url)
   const parts = parsed.pathname.split('/').filter(Boolean)
@@ -125,7 +142,7 @@ function serveRaw(url) {
   const gist = load().gists[id]
   if (!gist || !(name in gist.files)) fail(`fake gh: HTTP 404: Not Found (${url})`)
   out(gist.files[name])
-  process.exit(0)
+  await drainThenExit(0)
 }
 
 const argv = process.argv.slice(2)
@@ -171,7 +188,7 @@ for (let i = 0; i < rest.length; i += 1) {
   }
 }
 
-if (endpoint?.startsWith('https://')) serveRaw(endpoint)
+if (endpoint?.startsWith('https://')) await serveRaw(endpoint)
 
 const data = load()
 const body = inputFromStdin ? JSON.parse((await readStdin()) || '{}') : null
@@ -193,7 +210,7 @@ if (endpoint === '/gists' && method === 'POST') {
   data.gists[id] = gist
   save(data)
   out({ id: gist.id, html_url: gist.html_url, description: gist.description })
-  process.exit(0)
+  await drainThenExit(0)
 }
 
 if (gistMatch) {
@@ -206,7 +223,7 @@ if (gistMatch) {
       fail('fake gh: HTTP 500: Internal Server Error')
     }
     out(project(gist))
-    process.exit(0)
+    await drainThenExit(0)
   }
 
   if (method === 'PATCH') {
@@ -218,7 +235,7 @@ if (gistMatch) {
     gist.updated_at = new Date().toISOString()
     save(data)
     out({ id: gist.id, html_url: gist.html_url, updated_at: gist.updated_at })
-    process.exit(0)
+    await drainThenExit(0)
   }
 
   if (method === 'DELETE') {

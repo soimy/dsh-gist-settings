@@ -1,6 +1,9 @@
 # dependencies
 node_modules/
 pnpm-lock.yaml
+# The package has no dependencies and deliberately ships no lockfile, so `npm ci`
+# is not a supported path. Committing one would make it look like it is.
+package-lock.json
 
 # local runtime state (never commit: holds gist ids and local backup manifests)
 .gist-settings/
