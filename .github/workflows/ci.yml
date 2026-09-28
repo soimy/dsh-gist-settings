@@ -1,0 +1,88 @@
+name: CI
+
+# The offline suites need no credentials: every `gh` call in them goes to
+# `test/fake-gh.mjs`, and neither the plugin nor its tests import anything outside
+# `node:`. The `suites` job therefore runs exactly the command a contributor runs,
+# on every platform and Node version the plugin claims to support — which matters
+# here, because the code takes a different path on each: case folding and reserved
+# device names on Windows, Unicode normalisation on macOS, rename-over-a-file
+# semantics everywhere.
+#
+# The live suite is deliberately absent. It talks to the real GitHub API and
+# creates gists, so running it needs a `gist`-scoped token and a decision to spend
+# it — not a push. Run it locally with `npm run test:live`.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A new push to the same ref makes the previous run's answer stale.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suites:
+    name: ${{ matrix.os }} / Node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      # A failure on one platform is the interesting case, so let the other legs
+      # finish rather than cancelling them and hiding which platforms disagree.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: ['20.x', '22.x', '24.x']
+        include:
+          # `engines` is a promise about a floor, and a major-version alias only
+          # installs the newest release of that major — it would never notice a
+          # built-in that arrived in the middle of one. This leg runs the floor
+          # `engines` actually names, and the README documents why it is 20.3.
+          - os: ubuntu-latest
+            node: '20.3.0'
+    env:
+      # `test/schema.test.mjs` fails rather than skipping when it cannot find an
+      # installed Harness, and that is deliberate: a contract check that quietly
+      # runs nothing reads as coverage. No runner has one, and installing a few
+      # hundred packages on ten legs would cost more than it proves — so the skip
+      # is opted into here, visibly in the log, and the `schema` job below runs the
+      # same suite against a real install.
+      DSH_ALLOW_SCHEMA_SKIP: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      # No `npm ci` step: the package has no dependencies and no lockfile, and
+      # `npm ci` refuses to run without one. `npm test` needs nothing installed.
+      - name: Offline suites and repository checks
+        run: npm test
+
+  schema:
+    name: Schema contract against a real Harness install
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+      # The version comes from `peerDependencies`, so the contract is checked
+      # against the Harness this plugin says it targets and the two cannot drift.
+      # `--no-save` keeps the working tree — and package.json — untouched.
+      - name: Install the Harness version this plugin declares
+        run: |
+          version="$(node -p "require('./package.json').peerDependencies['@deepseek-ai/dsh']")"
+          echo "installing @deepseek-ai/dsh@$version"
+          npm install --no-save --no-audit --no-fund "@deepseek-ai/dsh@$version"
+      - name: Conformance against the Harness's own validators
+        env:
+          # The suite finds `dsh-tools` beside the Node installation by default; a
+          # local install puts it here instead.
+          DSH_TOOLS_DIR: ${{ github.workspace }}/node_modules/@deepseek-ai/dsh-tools
+        run: npm run test:schema

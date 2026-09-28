@@ -90,6 +90,35 @@ injected bugs survived the original suite, and because two later reviews found g
 level short of what they claimed. Treat "the tests pass" as a starting point, not a conclusion: prefer
 a case that fails before your change.
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs `npm test` — the same command you run — on Linux, Windows and macOS at
+Node 20.x, 22.x and 24.x, plus one leg on **20.3.0**, the floor `engines` names. The platform matrix is
+not padding: containment takes a different path per OS (junctions and reserved device names on Windows,
+Unicode normalisation on macOS, rename-over-a-file semantics everywhere), so a green Linux run says
+nothing about the code path a Windows user gets.
+
+Three things about it are deliberate:
+
+- **No install step.** The package has no dependencies and no lockfile, so `npm ci` would refuse to run
+  and there is nothing to install. `npm test` needs nothing but Node.
+- **`fail-fast` is off.** One platform failing does not cancel the others — which platform disagrees is
+  usually the whole diagnosis.
+- **The live suite is not in CI.** It writes to a real GitHub account, so it needs a `gist`-scoped token
+  and a decision to spend it. Run it yourself with `npm run test:live` when a change touches the API
+  round trip; it deletes every gist it creates.
+
+The second job, `schema`, is separate on purpose. `test/schema.test.mjs` checks the hand-written tool
+definitions against the Harness's *own* validators, so it needs a Harness installation — and no runner
+has one. It installs the version named in `peerDependencies` (so the contract and the declared target
+cannot drift) and runs that suite against it. The matrix, meanwhile, opts into the suite's explicit skip
+with `DSH_ALLOW_SCHEMA_SKIP=1`, which prints a `SKIP:` line, so the other cases still run on all ten
+legs. The skip is visible in the log rather than silent, because a contract check that quietly runs
+nothing reads as coverage.
+
+`.github/workflows/release.yml` runs on a `v*` tag and publishes the GitHub release from the changelog
+section, after re-running `npm test` on the tagged commit. See [Releases](#releases).
+
 ## Changing behaviour
 
 Anything that can delete, overwrite or publish needs an answer to three questions in the pull
@@ -119,11 +148,16 @@ The convention is enforced, not just documented:
 
 ```bash
 npm run changelog:check    # also part of npm test
+npm run docs:check         # also part of npm test
 ```
 
-It checks that `[Unreleased]` exists and comes first, that released headings are semver, strictly
-descending, and dated, that `package.json`'s version has a heading, and that every heading has
-exactly one link definition.
+The first checks that `[Unreleased]` exists and comes first, that released headings are semver, strictly
+descending, and dated, that `package.json`'s version has a heading, and that every heading has exactly
+one link definition.
+
+The second resolves every relative link in every Markdown file, refuses one that points outside the
+repository, and requires the two READMEs to link to each other — the pairing rule above, which nothing
+else notices when it breaks.
 
 ## Commit messages
 
@@ -159,8 +193,20 @@ Complete the checklist in the template. The parts that matter most:
    `[Unreleased]`.
 2. Add the two link definitions at the bottom of the file.
 3. Bump `package.json`.
-4. `npm test` and `npm run changelog:check`.
-5. Tag `vX.Y.Z` and push the tag; the GitHub release is generated from the changelog section.
+4. `npm test`, which covers the changelog and documentation checks as well as the suites.
+5. Tag `vX.Y.Z` and push the tag. `.github/workflows/release.yml` re-runs `npm test` on the tagged
+   commit and publishes the GitHub release from that version's changelog section.
+
+Preview the notes before you tag, and let the script catch the usual mistake — tagging before the
+version bump merged:
+
+```bash
+npm run release:notes -- v0.2.0
+```
+
+It refuses a tag that does not match `package.json`, a version with no dated changelog section, and an
+empty section, writing nothing to stdout when it refuses. That is what makes the release job's
+`> notes.md` safe to pipe: a failure cannot publish a release with no notes.
 
 Versioning follows the usual reading of Semantic Versioning for a tool like this: a change to what
 gets uploaded or deleted, or to the state file's meaning, is breaking even when the API looks the same.
@@ -233,6 +279,20 @@ plugin_manager  action: install_bundle  target: <此仓库的绝对路径>
 
 回归套件与安全套件的存在，是因为变异审计发现：**43 个故意注入的 bug 里有 32 个能骗过原本的测试**，也因为随后两轮审核都发现防线只做到了它们声称的上一层。所以请把"测试通过"当成起点而非结论——最好能给出一个"改动前会失败"的用例。
 
+### 持续集成
+
+`.github/workflows/ci.yml` 跑的就是 `npm test`——与你在本地跑的同一条命令——覆盖 Linux、Windows、macOS 三个平台与 Node 20.x、22.x、24.x，另加一条直接在 **20.3.0**（`engines` 声明的下限）上跑的支线。平台矩阵不是凑数：目录包容在每个系统上走的是不同代码路径（Windows 上是 junction 与保留设备名，macOS 上是 Unicode 规范化，各处的 rename-over-file 语义也不同），所以 Linux 全绿并不能说明 Windows 用户拿到的路径是对的。
+
+其中三点是刻意的：
+
+- **没有安装步骤。** 本包没有任何依赖、也没有 lockfile，`npm ci` 会直接拒绝运行，而且也没有什么可装的。`npm test` 只需要 Node。
+- **关掉了 `fail-fast`。** 一个平台失败不会取消其他平台——「哪个平台不同意」通常就是全部诊断信息。
+- **CI 里不含真实用例。** 它会写入真实 GitHub 账号，因此需要一个 `gist` 权限的 token，以及决定去花它的人。改动涉及 API 往返时请自己跑 `npm run test:live`；它会删除自己创建的每一个 gist。
+
+第二个任务 `schema` 是刻意独立的。`test/schema.test.mjs` 拿手写的工具定义去撞 Harness **自带**的校验器，因此需要一份 Harness 安装——而运行器上没有。它会安装 `peerDependencies` 里声明的那个版本（这样契约与声明的目标版本不会漂移），并用它跑这套校验。与此同时，矩阵那边选择接受这套件的显式跳过（`DSH_ALLOW_SCHEMA_SKIP=1`，日志里会打印 `SKIP:` 行），从而让其余用例仍然在全部十条支线上跑。这个跳过是**日志里看得见的**，而不是静默的，因为一个 quietly 什么都不跑的契约检查读起来像是覆盖到了。
+
+`.github/workflows/release.yml` 在推送 `v*` 标签时运行：先在被打标签的提交上重跑 `npm test`，再用 changelog 对应小节发布 GitHub Release。见[发布](#发布)。
+
 ### 修改行为
 
 任何可能删除、覆盖或对外发布内容的改动，都需要在 PR 里回答三个问题：
@@ -256,9 +316,12 @@ plugin_manager  action: install_bundle  target: <此仓库的绝对路径>
 
 ```bash
 npm run changelog:check    # 也包含在 npm test 里
+npm run docs:check         # 也包含在 npm test 里
 ```
 
-它会检查：`[Unreleased]` 存在且位于最前；已发布版本的标题是语义化版本、严格降序、带日期；`package.json` 的版本有对应小节；每个标题恰好有一条链接定义。
+前者检查：`[Unreleased]` 存在且位于最前；已发布版本的标题是语义化版本、严格降序、带日期；`package.json` 的版本有对应小节；每个标题恰好有一条链接定义。
+
+后者解析每个 Markdown 文件里的全部相对链接，拒绝指向仓库之外的链接，并要求两个 README 互相链接——也就是上面那条配对规则，它一旦断了没有别的东西会发现。
 
 ### 提交信息
 
@@ -290,8 +353,16 @@ profile then reported in-sync.
 1. 把 `[Unreleased]` 的内容移到新的 `## [x.y.z] - YYYY-MM-DD` 标题下，并新建空的 `[Unreleased]`。
 2. 在文件底部补上两条链接定义。
 3. 升 `package.json` 版本号。
-4. 跑 `npm test` 和 `npm run changelog:check`。
-5. 打 `vX.Y.Z` 标签并推送；GitHub Release 由 changelog 对应小节生成。
+4. 跑 `npm test`，它已经把 changelog 与文档链接检查连同各套件一起覆盖了。
+5. 打 `vX.Y.Z` 标签并推送。`.github/workflows/release.yml` 会在被打标签的提交上重跑 `npm test`，并用该版本的 changelog 小节发布 GitHub Release。
+
+打标签之前可以先预览发布说明，也让脚本替你抓那个最常见的错误——版本号还没合并就先打了标签：
+
+```bash
+npm run release:notes -- v0.2.0
+```
+
+标签与 `package.json` 不一致、版本没有带日期的 changelog 小节、小节内容为空，这三种情况它都会拒绝，且在拒绝时**不向 stdout 写任何东西**。正因如此，发布任务里的 `> notes.md` 才可以安全地接管道：失败不可能发布出一个没有说明的 Release。
 
 版本号遵循语义化版本的通常理解，但对这类工具而言："上传或删除的内容"或"状态文件的含义"发生变化，即使 API 看起来没变，也算破坏性变更。
 

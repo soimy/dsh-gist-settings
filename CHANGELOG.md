@@ -16,8 +16,35 @@ pass over those fixes themselves. Most are pinned by `test/safety.test.mjs`; the
 cases live in `test/regression.test.mjs`, and the ones that can only be settled against real GitHub are
 in `test/live.test.mjs`. Every one of them fails if its fix is reverted.
 
+### Added
+
+- **Continuous integration.** `npm test` now runs on Linux, Windows and macOS at Node 20.x, 22.x and
+  24.x, plus one leg on 20.3.0 — the floor `engines` names. The platform matrix is not decoration: the
+  containment checks take a different path per OS (junctions and reserved device names on Windows,
+  Unicode normalisation on macOS, rename-over-a-file semantics everywhere), so a green Linux run says
+  nothing about what a Windows user gets. No install step is needed, because the package has no
+  dependencies and no lockfile; `fail-fast` is off so one platform's failure does not hide the others.
+  The live suite stays out of CI on purpose: it writes to a real GitHub account. A second job installs
+  the Harness version `peerDependencies` names and runs the schema suite against its real validators,
+  which no runner has by default; the matrix opts into that suite's explicit skip instead, so the skip
+  appears in the log rather than passing silently.
+- **A documentation check**, `npm run docs:check`, now part of `npm test`: it resolves every relative
+  link in every Markdown file, refuses one that points outside the repository, and requires the two
+  READMEs to link to each other. The rule that they stay in step was documented but unchecked.
+- **A release workflow.** `CONTRIBUTING.md` told a maintainer that pushing a `vX.Y.Z` tag generates the
+  GitHub release from the changelog section, and nothing did. `.github/workflows/release.yml` now
+  re-runs `npm test` on the tagged commit and publishes that version's section as the release notes.
+  `npm run release:notes -- vX.Y.Z` previews them, and refuses a tag that disagrees with `package.json`,
+  a version with no dated changelog section, and an empty one — writing nothing to stdout when it
+  refuses, so a failed run cannot publish a release with no notes.
+
 ### Fixed
 
+- **`engines` claimed Node 20.0.0; the code needs 20.3.0.** `AbortSignal.any`, which puts one deadline
+  on the `fetch` that reads truncated gist content, arrived in 20.3. On 20.0–20.2 the plugin therefore
+  loaded and then failed the first time it read a file above the API's truncation threshold. The floor
+  is now 20.3.0, both READMEs say so, and CI runs a leg on 20.3.0 itself, so the claim is tested rather
+  than asserted.
 - **A tracked file named `rollback` could abort the whole rollback.** The restore copies went into a fixed
   `rollback` subdirectory of the staging directory, so a profile tracking a file by that name — one not
   yet committed, whose staged copy still occupied the path — made creating that directory throw. Every

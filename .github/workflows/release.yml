@@ -1,0 +1,48 @@
+name: Release
+
+# CONTRIBUTING.md's release steps end with "Tag `vX.Y.Z` and push the tag; the
+# GitHub release is generated from the changelog section". This is what generates
+# it — until now that step described automation that did not exist.
+#
+# It validates before it publishes. The common mistake is tagging before the
+# version bump merged, which would ship a release whose notes and package version
+# contradict the tag; `scripts/release-notes.mjs` refuses that, and writes nothing
+# to stdout when it refuses, so a failure cannot publish empty notes.
+#
+# The suites run again here rather than being taken on trust from the branch's CI
+# run: a tag can point at any commit, including one no push ever built.
+
+on:
+  push:
+    tags: ['v*']
+
+# Only the release needs to write; everything else is read.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publish ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.3.0'
+
+      # Exactly what CI runs, on the commit the tag points at.
+      - name: Offline suites and repository checks
+        run: npm test
+
+      - name: Generate the notes from the changelog section
+        run: node scripts/release-notes.mjs "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --verify-tag
