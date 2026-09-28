@@ -50,7 +50,15 @@ function walk(dir, found = []) {
 }
 
 /**
- * Every link target in one Markdown document.
+ * Every link destination in one Markdown document.
+ *
+ * Scanned rather than matched with one pattern, because a destination is not
+ * "anything up to the first `)`": `[x](<a b.md>)` wraps it in angle brackets and
+ * may contain spaces, and `[x](a(1).md)` contains balanced parentheses. A pattern
+ * that stops at the first space or the first `)` does both kinds of damage — it
+ * misses real links, so a destination pointing at nothing passes unchecked, and it
+ * invents others, so `a(1).md` becomes `a(1` and a link that is perfectly fine
+ * fails `npm test`.
  *
  * Inline links (`[text](target)`) and reference definitions (`[label]: target`)
  * both count. Code is removed first so that a document may show link syntax as an
@@ -61,9 +69,44 @@ function linksIn(text) {
     .replace(/^```[\s\S]*?^```/gm, '')
     .replace(/^~~~[\s\S]*?^~~~/gm, '')
     .replace(/`[^`\n]*`/g, '')
+
   const targets = []
-  for (const match of stripped.matchAll(/\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)/g)) targets.push(match[1])
-  for (const match of stripped.matchAll(/^\[[^\]]+\]:\s*(\S+)\s*$/gm)) targets.push(match[1])
+  for (let index = 0; index < stripped.length; index += 1) {
+    if (stripped[index] !== ']' || stripped[index + 1] !== '(') continue
+    let cursor = index + 2
+    while (cursor < stripped.length && /\s/.test(stripped[cursor])) cursor += 1
+
+    if (stripped[cursor] === '<') {
+      // Angle brackets: spaces are allowed inside, a line break is not.
+      const close = stripped.indexOf('>', cursor + 1)
+      if (close === -1) continue
+      const inner = stripped.slice(cursor + 1, close)
+      if (!inner.includes('\n')) targets.push(inner)
+      continue
+    }
+
+    const start = cursor
+    let depth = 0
+    for (; cursor < stripped.length; cursor += 1) {
+      const character = stripped[cursor]
+      if (character === '\\') {
+        cursor += 1
+      } else if (character === '(') {
+        depth += 1
+      } else if (character === ')') {
+        if (depth === 0) break
+        depth -= 1
+      } else if (/\s/.test(character)) {
+        break
+      }
+    }
+    const bare = stripped.slice(start, cursor)
+    if (bare !== '') targets.push(bare)
+  }
+
+  for (const match of stripped.matchAll(/^\[[^\]]+\]:\s*(?:<([^>\n]+)>|(\S+))\s*$/gm)) {
+    targets.push(match[1] ?? match[2])
+  }
   return targets
 }
 
@@ -73,6 +116,10 @@ if (files.length === 0) fail('no Markdown files found; the checker would prove n
 /* ------------------------------------------------------------------- links -- */
 
 let checked = 0
+// Resolved once: the containment comparison has to be between real paths, or a
+// symlink inside the repository satisfies it by looking like an ordinary relative
+// path while pointing somewhere else entirely.
+const realRoot = fs.realpathSync(root)
 for (const file of files) {
   const relative = path.relative(root, file).split(path.sep).join('/')
   for (const raw of linksIn(fs.readFileSync(file, 'utf8'))) {
@@ -95,7 +142,9 @@ for (const file of files) {
       fail(`${relative}: ${raw} does not exist`)
       continue
     }
-    const outward = path.relative(root, resolved)
+    // Where it lands, not where it spells.
+    const real = fs.realpathSync(resolved)
+    const outward = path.relative(realRoot, real)
     if (outward.startsWith('..') || path.isAbsolute(outward)) {
       fail(`${relative}: ${raw} points outside the repository`)
     }

@@ -9,8 +9,13 @@ name: Release
 # contradict the tag; `scripts/release-notes.mjs` refuses that, and writes nothing
 # to stdout when it refuses, so a failure cannot publish empty notes.
 #
-# The suites run again here rather than being taken on trust from the branch's CI
-# run: a tag can point at any commit, including one no push ever built.
+# `npm test` runs here with a real Harness installed, exactly as the CI `schema` job
+# does, rather than with the skip the ten-leg matrix uses. Without it this job would
+# have died in `test/schema.test.mjs` — before it published anything — on the first
+# tag anybody pushed.
+#
+# Actions are pinned to commit SHAs rather than to `@v4` tags: this job holds
+# `contents: write`, so a repointed tag would run with release-writing rights.
 
 on:
   push:
@@ -24,14 +29,16 @@ jobs:
   release:
     name: Publish ${{ github.ref_name }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.0.4
         with:
           node-version: '20.3.0'
+      - uses: ./.github/actions/install-harness
 
-      # Exactly what CI runs, on the commit the tag points at.
+      # Exactly what CI runs, on the commit the tag points at — including the schema
+      # contract, which has a Harness to run against here.
       - name: Offline suites and repository checks
         run: npm test
 

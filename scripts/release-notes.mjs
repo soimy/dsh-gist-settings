@@ -76,7 +76,12 @@ if (version) {
         }
         continue
       }
-      if (/^## \[/.test(line)) {
+      // The section ends at the next heading *or* at the link definitions, which sit
+      // below the last release. Stopping only at a heading meant that for the newest
+      // release the extraction ran on into those definitions — so a section with no
+      // entries of its own still looked non-empty, and the release would have
+      // published the link definitions as its notes.
+      if (/^## \[/.test(line) || /^\[[^\]]+\]:\s*\S+/.test(line)) {
         end = index
         break
       }

@@ -74,6 +74,7 @@ Knowing which suite covers what saves a lot of guessing.
 | `npm run test:schema` | 49 | The hand-written definitions against the Harness's *own* validators — the registration contract, the supported JSON Schema subset, argument validation, and that each returned value satisfies its declared output schema. |
 | `npm run test:regression` | 30 | The specific defects an adversarial review found. Every case here fails if its fix is reverted. |
 | `npm run test:safety` | 38 | The guarantees the README makes: containment for the profile and every tracked file, an all-or-nothing download, `force` doing what it says, recovery of a profile whose directory is gone, one-sync convergence after a remote deletion, cross-process state locking, and a rollback that never overwrites a revision it cannot prove it wrote. |
+| `npm run test:release` | 6 | The release-notes script: the success path, and every way it is meant to refuse a tag — a version that disagrees with `package.json`, no dated section, an empty section, a malformed tag. It is the one script here that normally first runs on a tag push, so the refusals matter as much as the success. |
 | `npm run test:live` | 12 | The real GitHub round trip, including a file above the API's truncation threshold. Opt-in, and it deletes every gist it creates. |
 
 `test/schema.test.mjs` **fails** rather than skipping when it cannot find a DSH installation, because
@@ -115,6 +116,13 @@ cannot drift) and runs that suite against it. The matrix, meanwhile, opts into t
 with `DSH_ALLOW_SCHEMA_SKIP=1`, which prints a `SKIP:` line, so the other cases still run on all ten
 legs. The skip is visible in the log rather than silent, because a contract check that quietly runs
 nothing reads as coverage.
+
+That install lives in one composite action, `.github/actions/install-harness`, which the release job uses
+too. Two jobs need a Harness; they should not each have their own way of getting one — and the release
+job in particular must not take the matrix's skip, so `npm test` there runs the schema contract for real.
+
+Actions are pinned to commit SHAs rather than to `@v4` tags: a tag is mutable, a repointed one would run
+inside this repository's token on the next push, and the release job holds `contents: write`.
 
 `.github/workflows/release.yml` runs on a `v*` tag and publishes the GitHub release from the changelog
 section, after re-running `npm test` on the tagged commit. See [Releases](#releases).
@@ -271,6 +279,7 @@ plugin_manager  action: install_bundle  target: <此仓库的绝对路径>
 | `npm run test:schema` | 49 | 手写定义 vs Harness **自带**校验器：注册契约、受支持的 JSON Schema 子集、参数校验、返回值满足声明的输出 schema。 |
 | `npm run test:regression` | 30 | 对抗性审核发现的具体缺陷。**每一条在修复被回退时都会失败。** |
 | `npm run test:safety` | 38 | README 承诺的那些保证：profile 与每个受追踪文件的目录包容、全有或全无的下载、`force` 说到做到、目录被整个删掉后的恢复、远端删除后一次同步即收敛、跨进程状态锁，以及绝不覆盖「无法证明是自己写的那一版」的回滚。 |
+| `npm run test:release` | 6 | 发布说明脚本：成功路径，以及它**应当拒绝**的每一种 tag —— 版本与 `package.json` 不一致、没有带日期的小节、小节为空、tag 格式不合法。这是本仓库唯一一个通常要到打 tag 才第一次运行的脚本，所以"拒绝"与"成功"同样重要。 |
 | `npm run test:live` | 12 | 真实 GitHub 往返，包含一个超过 API 截断阈值的文件。需显式开启，且会删除自己创建的每一个 gist。 |
 
 `test/schema.test.mjs` 找不到 DSH 安装时**会失败而不是跳过**——静默跳过会让 `npm test` 全绿但实际上一个校验都没跑。做无关改动时可设 `DSH_ALLOW_SCHEMA_SKIP=1`。
@@ -290,6 +299,10 @@ plugin_manager  action: install_bundle  target: <此仓库的绝对路径>
 - **CI 里不含真实用例。** 它会写入真实 GitHub 账号，因此需要一个 `gist` 权限的 token，以及决定去花它的人。改动涉及 API 往返时请自己跑 `npm run test:live`；它会删除自己创建的每一个 gist。
 
 第二个任务 `schema` 是刻意独立的。`test/schema.test.mjs` 拿手写的工具定义去撞 Harness **自带**的校验器，因此需要一份 Harness 安装——而运行器上没有。它会安装 `peerDependencies` 里声明的那个版本（这样契约与声明的目标版本不会漂移），并用它跑这套校验。与此同时，矩阵那边选择接受这套件的显式跳过（`DSH_ALLOW_SCHEMA_SKIP=1`，日志里会打印 `SKIP:` 行），从而让其余用例仍然在全部十条支线上跑。这个跳过是**日志里看得见的**，而不是静默的，因为一个 quietly 什么都不跑的契约检查读起来像是覆盖到了。
+
+这份安装逻辑放在唯一的 composite action（`.github/actions/install-harness`）里，发布任务也复用它。有两个任务需要 Harness，它们就不该各自发明一套拿 Harness 的办法——尤其发布任务**不能**沿用矩阵的那个跳过，所以那边的 `npm test` 会真的执行 schema 契约。
+
+所有 action 都按 commit SHA 固定，而不是 `@v4` 这类标签：标签是可变的，被改指的标签会在下一次推送时带着本仓库的 token 运行，而发布任务持有 `contents: write`。
 
 `.github/workflows/release.yml` 在推送 `v*` 标签时运行：先在被打标签的提交上重跑 `npm test`，再用 changelog 对应小节发布 GitHub Release。见[发布](#发布)。
 

@@ -1,0 +1,24 @@
+name: Install the Harness
+description: >
+  Installs the @deepseek-ai/dsh version this plugin declares in `peerDependencies`
+  and points DSH_TOOLS_DIR at the `dsh-tools` inside it, so the schema-conformance
+  suite runs against the Harness's own validators instead of skipping.
+
+  Shared by the CI `schema` job and the release job on purpose: the release job used
+  to run `npm test` with no Harness at all, which meant a tag push would have died
+  in `test/schema.test.mjs` before it published anything. Two jobs that both need a
+  Harness should not each have their own way of getting one.
+
+  The version comes from `package.json`, so the contract and the declared target
+  cannot drift. `--no-save` leaves package.json and the working tree untouched.
+
+runs:
+  using: composite
+  steps:
+    - name: Install the declared version
+      shell: bash
+      run: |
+        version="$(node -p "require('./package.json').peerDependencies['@deepseek-ai/dsh']")"
+        echo "installing @deepseek-ai/dsh@$version"
+        npm install --no-save --no-audit --no-fund "@deepseek-ai/dsh@$version"
+        echo "DSH_TOOLS_DIR=$GITHUB_WORKSPACE/node_modules/@deepseek-ai/dsh-tools" >> "$GITHUB_ENV"

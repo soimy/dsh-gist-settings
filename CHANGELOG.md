@@ -37,9 +37,35 @@ in `test/live.test.mjs`. Every one of them fails if its fix is reverted.
   `npm run release:notes -- vX.Y.Z` previews them, and refuses a tag that disagrees with `package.json`,
   a version with no dated changelog section, and an empty one — writing nothing to stdout when it
   refuses, so a failed run cannot publish a release with no notes.
+- **`npm run test:release`**, six cases for the release-notes script: the success path, and every way it
+  is meant to refuse a tag. It is the one script here that normally first runs on a tag push, which is
+  the worst moment to discover it accepts the wrong thing, so its refusals are checked on every push.
 
 ### Fixed
 
+- **The release job could not have published anything.** It ran `npm test`, which includes
+  `test/schema.test.mjs` — and that suite fails, by design, when it cannot find an installed Harness.
+  The matrix gets away with it by opting into the skip and letting a separate job run the contract; the
+  release job had neither, so the first `v*` tag anybody pushed would have died in `npm test` before it
+  generated the notes. Both jobs now install the Harness through one shared composite action, so the
+  release job runs the schema contract for real rather than taking the matrix's skip.
+- **The test double could truncate its own output.** `test/fake-gh.mjs` wrote a body and then called
+  `process.exit(0)`, and exit does not wait for a write to a pipe. This double answers `GET /gists/<id>`
+  and a raw URL with the whole payload — hundreds of kilobytes for the suites that track a few hundred
+  files, and 1.5 MB for the live truncation case, both well past the 64 KiB pipe buffer — so the body
+  arrived cut short now and then, which core reported as `gh returned non-JSON output` and which read
+  like a defect in the plugin. Those paths now wait for the write to drain before exiting, which also
+  required them to be awaited: `process.exit()` never returns, so a replacement that does would let the
+  request handling run on and answer a second time.
+- **The documentation check both missed links and failed on good ones.** Destinations wrapped in angle
+  brackets (`[x](<a b.md>)`) were truncated at the space, so a link to nothing passed unchecked, and
+  destinations containing balanced parentheses (`[x](a(1).md)`) were cut at the first `)`, so a link to a
+  file that exists failed `npm test`. Containment was also compared against the spelled path, so a link
+  through a symlink inside the repository reached a file outside it and satisfied the rule that says it
+  cannot. Destinations are now scanned rather than matched, and containment compares real paths.
+- **The release-notes script accepted an empty section.** When the tagged version was the last section in
+  the file, extraction ran on into the link definitions below it, so a section with no entries of its own
+  looked non-empty and those definitions would have been published as the release notes.
 - **`engines` claimed Node 20.0.0; the code needs 20.3.0.** `AbortSignal.any`, which puts one deadline
   on the `fetch` that reads truncated gist content, arrived in 20.3. On 20.0–20.2 the plugin therefore
   loaded and then failed the first time it read a file above the API's truncation threshold. The floor
