@@ -12,6 +12,12 @@ description: >
   The version comes from `package.json`, so the contract and the declared target
   cannot drift. `--no-save` leaves package.json and the working tree untouched.
 
+  Needs a Node version the Harness supports — `@deepseek-harness-tui/dsh-tui`
+  declares `engines: ^22.19 || >=24`. Installing it on an older Node does not fail:
+  npm resolves an incomplete tree, and the tools this action exists to locate are
+  simply absent. Hence the check below, which turns that into a failure here with
+  the reason attached, instead of a mysterious test failure several steps later.
+
 runs:
   using: composite
   steps:
@@ -19,6 +25,25 @@ runs:
       shell: bash
       run: |
         version="$(node -p "require('./package.json').peerDependencies['@deepseek-ai/dsh']")"
-        echo "installing @deepseek-ai/dsh@$version"
+        echo "installing @deepseek-ai/dsh@$version on Node $(node --version)"
         npm install --no-save --no-audit --no-fund "@deepseek-ai/dsh@$version"
-        echo "DSH_TOOLS_DIR=$GITHUB_WORKSPACE/node_modules/@deepseek-ai/dsh-tools" >> "$GITHUB_ENV"
+
+        # Where the tools landed is not ours to assume: npm's placement depends on its
+        # version and on what else is installed. Resolving from the Harness's own
+        # location works whether npm hoisted the package or nested it.
+        tools="$(node -e "
+          const { createRequire } = require('node:module');
+          const path = require('node:path');
+          const fromRepo = createRequire(path.join(process.cwd(), 'index.js'));
+          const dsh = fromRepo.resolve('@deepseek-ai/dsh/package.json');
+          const fromDsh = createRequire(dsh);
+          console.log(path.dirname(fromDsh.resolve('@deepseek-ai/dsh-tools/package.json')));
+        ")"
+
+        if [ ! -f "$tools/lib/types/json-schema.js" ]; then
+          echo "::error::dsh-tools was not found at $tools. The Harness needs Node ^22.19 || >=24; on an older Node the install completes without it."
+          exit 1
+        fi
+
+        echo "dsh-tools: $tools"
+        echo "DSH_TOOLS_DIR=$tools" >> "$GITHUB_ENV"

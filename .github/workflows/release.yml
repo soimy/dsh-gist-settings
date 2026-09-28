@@ -10,9 +10,16 @@ name: Release
 # to stdout when it refuses, so a failure cannot publish empty notes.
 #
 # `npm test` runs here with a real Harness installed, exactly as the CI `schema` job
-# does, rather than with the skip the ten-leg matrix uses. Without it this job would
+# does, rather than with the skip the platform matrix uses. Without it this job would
 # have died in `test/schema.test.mjs` — before it published anything — on the first
 # tag anybody pushed.
+#
+# The Node version is the floor `engines` names, which is the Harness's own floor:
+# `@deepseek-harness-tui/dsh-tui` declares `engines: ^22.19 || >=24`. This job
+# originally pinned 20.3.0 and failed on the first tag, because npm 9 — which 20.3
+# bundles — resolved the Harness's tree to nine packages instead of five hundred and
+# the tools the contract needs were never installed. The failure looked like a test
+# failure; it was an unsupported runtime.
 #
 # Actions are pinned to commit SHAs rather than to `@v4` tags: this job holds
 # `contents: write`, so a repointed tag would run with release-writing rights.
@@ -38,7 +45,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.0.4
         with:
-          node-version: '20.3.0'
+          node-version: '22.19.0'
       - uses: ./.github/actions/install-harness
 
       # Exactly what CI runs, on the commit the tag points at — including the schema

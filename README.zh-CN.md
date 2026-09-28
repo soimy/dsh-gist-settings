@@ -17,7 +17,7 @@
 | Host 插件 + 4 个 agent 工具 | **已安装并生效**，可在会话中调用 |
 | 真实 GitHub 往返 | **已在真实账号上验证** |
 | 测试 | **七套共 180 项离线用例，另有 12 项真实用例**，全部通过 |
-| CI | 在 Linux、Windows、macOS 上跑离线用例与仓库检查，覆盖 Node 20.3、20.x、22.x、24.x |
+| CI | 在 Linux、Windows、macOS 上跑离线用例与仓库检查，覆盖 Node 22.19.0、22.x、24.x |
 | Client 设置页 | 尚未开始 —— 见[设置页](#设置页) |
 | 许可证 | MIT |
 
@@ -27,10 +27,12 @@
 
 ## 环境要求
 
-- **Node.js 20.3+** —— 引擎使用 `node:` 前缀的内置模块、用于识别嵌套加锁的 `AsyncLocalStorage`，以及
-  `AbortSignal.any`：读取被截断的 gist 内容时，它给全局 `fetch` 加上统一时限。下限是 20.3 而不是
-  20.0 正因如此：在 20.0–20.2 上插件能加载，但第一次需要读取超过 API 截断阈值的文件时就会失败。
-  `.github/workflows/ci.yml` 直接在 20.3.0 上跑测试，所以这个下限是被验证的，而不是被声称的。
+- **Node.js 22.19 或更高** —— 这是 **Harness 本身**的要求，而不是本插件的要求：
+  `@deepseek-harness-tui/dsh-tui` 声明 `engines: { node: "^22.19 || >=24" }`，而 Harness 插件离开
+  Harness 无法加载。引擎自身的代码要求更低（`node:` 前缀内置模块、`AsyncLocalStorage`，以及
+  `AbortSignal.any`（20.3）——它给读取被截断 gist 内容的全局 `fetch` 加上统一时限），但一个根本
+  跑不起来的环境算不上"支持"，所以这里的 `engines` 写的是平台真正支持的版本。
+  `.github/workflows/ci.yml` 有一条支线直接在 **22.19.0** 上运行，所以这个要求是被验证的，而不是被声称的。
 - **`gh` 命令，已安装并已登录。**
 
   ```bash
