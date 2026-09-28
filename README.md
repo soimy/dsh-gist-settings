@@ -16,7 +16,7 @@ guarded two-way sync are exposed as agent tools, so you can drive them from a co
 | Sync engine (`lib/core.js`) | Done |
 | Host plugin + agent tools | **Installed and live**; callable from a session |
 | Real GitHub round-trip | **Verified** against a real account |
-| Test suite | **158 offline cases across five suites, plus 11 live cases**, all passing |
+| Test suite | **154 offline cases across five suites, plus 12 live cases**, all passing |
 | Client settings page | Not started — see [The settings page](#the-settings-page) |
 | Licence | MIT |
 
@@ -146,10 +146,11 @@ in this repo's `cordis.patch.yml` is the template):
 | `stateDir` | `<dshHome>/gist-settings` | Where the gist index and backups are written. |
 
 Each `profileFiles` entry is also the file's name in the gist and its path inside a backup, so it has
-to be a plain relative path: no `..`, no absolute or drive-relative prefix, no colon, and no two
-entries that differ only in their separator. Backslashes are accepted and canonicalised to `/`, so one
-spelling reaches the gist from every platform. A name that could never be handled is rejected while
-the plugin loads, rather than on the first tool call.
+to be a plain **single** name: no separator, no `..`, no absolute or drive-relative prefix, no colon,
+and no two entries that fold to the same name on this platform. A separator is refused because a gist
+is a flat collection of files rather than a tree — GitHub answers a filename containing a slash with
+`HTTP 422 Validation Failed`, and that filename is exactly what has to be sent. A name that could never
+be handled is rejected while the plugin loads, rather than on the first tool call.
 
 The plugin declares no `Config` schema, so it validates the block itself at load time: an unknown key
 is rejected with the list of known keys, and a wrong type is rejected rather than silently falling
@@ -200,16 +201,15 @@ next `gist_status` repairs the stale baseline.
 against the framework's own rules, and a resolved profile directory is re-checked against
 `realpath(profilesDir)`, so a junction placed at `profiles/<name>` is refused rather than followed. Each
 tracked file is then held to the *profile's* boundary: a `profileFiles` entry must be a relative path
-with no `..`, no drive letter and no reserved character, and every segment of its resolved path is
-re-checked. A tracked file that is itself a link out of the tree, that sits under a linked
-subdirectory, or that reaches into a *sibling* profile — which would let one profile's gist publish and
-then overwrite another profile's config — is refused. Safe nested names such as `config/app.yml` are
-supported, including recreating a parent directory that was deleted. The check is repeated immediately
-before each write rather than once per operation, which narrows the window in which a directory could be
-swapped for a link mid-download to the rename call itself; closing it completely would need
-handle-relative operations that Node's `fs` does not expose. Note what that does and does not
-cover: a link that is live when it is checked is caught, and one that is dangling cannot be written
-through at all, but the check itself is still a check-then-use — the gap is narrowed, not closed.
+with no separator, no `..`, no drive letter and no reserved character, and its resolved path is
+re-checked. A tracked file that is itself a link out of the tree, or that is a link into a *sibling*
+profile — which would let one profile's gist publish and then overwrite another profile's config — is
+refused. The check is repeated immediately before each write rather than once per operation, which
+narrows the window in which the profile directory could be swapped for a link mid-download to the
+rename call itself; closing it completely would need handle-relative operations that Node's `fs` does
+not expose. Note what that does and does not cover: a link that is live when it is checked is caught,
+and one that is dangling cannot be written through at all, but the check is still a check-then-use — the
+gap is narrowed, not closed.
 
 **One writer at a time, across processes.** Read-modify-write cycles over `state.json` are serialised
 by an in-process queue *and* by a lock file (`<stateDir>/state.lock`) naming the pid that owns it. Two
@@ -254,7 +254,7 @@ cordis.patch.yml       Bundle patch (inserts the plugin row; documents config)
 client.js              Client settings page (not yet written)
 locale/{en,zh}.json    Plugin display metadata for Plugin Manager cards
 icon.svg               Bundle icon
-test/                  158 offline cases across five suites, plus 11 live ones
+test/                  154 offline cases across five suites, plus 12 live ones
 scripts/               check-changelog.mjs — validates CHANGELOG.md
 .github/               Issue forms and the pull-request template
 ```
@@ -271,7 +271,7 @@ scripts/               check-changelog.mjs — validates CHANGELOG.md
 ## Development
 
 ```bash
-npm test                # the five offline suites (158 cases) plus the changelog check
+npm test                # the five offline suites (154 cases) plus the changelog check
 npm run test:sync       # engine lifecycle against a fake gh
 npm run test:tools      # tool layer, argument validation, failure isolation
 npm run test:schema     # definitions vs. the installed Harness validators

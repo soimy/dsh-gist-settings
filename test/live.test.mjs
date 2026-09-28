@@ -189,6 +189,28 @@ try {
     await core.downloadProfile('big', { ghPath, config: bigConfig, force: true })
     assert.equal(await fs.readFile(path.join(bigDir, 'big.yml'), 'utf8'), body)
   })
+  await check('the API refuses a filename containing a slash, which is why tracked names have none', async () => {
+    // This pins the *reason* `normalizeTrackedName` rejects a separator rather than
+    // the rejection itself: a gist is a flat collection of files, and this is the
+    // answer the API gives. If GitHub ever allows it, this case fails and the
+    // decision can be revisited instead of quietly staying wrong.
+    assert.throws(
+      () => core.resolveProfileFiles({ profileFiles: ['config/probe.yml'] }),
+      /a gist cannot hold a directory/,
+    )
+
+    const result = await core.ghRun(
+      ghPath,
+      ['api', '--method', 'POST', '/gists', '-H', 'Content-Type: application/json', '--input', '-'],
+      { input: JSON.stringify({ public: false, files: { 'config/probe.yml': { content: 'probe\n' } } }) },
+    )
+    if (result.code === 0) {
+      // Do not leave a surprise gist behind if the API has changed its mind.
+      await core.gistDelete(ghPath, JSON.parse(result.stdout).id)
+      assert.fail('the API accepted a nested filename; nested tracked names could be reconsidered')
+    }
+    assert.match(`${result.stdout}${result.stderr}`, /422|Validation Failed/)
+  })
 } finally {
   for (const id of [gistId, bigGistId].filter(Boolean)) {
     try {

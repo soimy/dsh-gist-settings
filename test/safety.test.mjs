@@ -99,17 +99,23 @@ console.log(`\ndsh-gist-settings safety tests\n  fixture: ${root}\n`)
 
 await check('a tracked name that could leave the profile directory is refused', async () => {
   const refused = [
+    // Anything with a separator, which is what every traversal needs. GitHub
+    // answers a gist filename containing a slash with HTTP 422 (the live suite
+    // pins that), so a separator cannot be the gist's key either way.
     '../outside.txt',
     'a/../../outside.txt',
     '/etc/passwd',
     'C:\\Windows\\notepad.exe',
-    'C:relative.txt',
-    '..',
-    '.',
     'nested/..',
     'a//b.yml',
     'a/./b.yml',
     'a/',
+    'config/app.yml',
+    'config\\app.yml',
+    // And the names that are dangerous or rejected without any separator.
+    '..',
+    '.',
+    'C:relative.txt',
     'a\u0000b.yml',
     'file:stream',
     'trailing.',
@@ -126,11 +132,11 @@ await check('a tracked name that could leave the profile directory is refused', 
   }
 
   assert.equal(core.normalizeTrackedName('cordis.patch.yml'), 'cordis.patch.yml')
-  assert.equal(core.normalizeTrackedName('config/app.yml'), 'config/app.yml')
-  assert.equal(
-    core.normalizeTrackedName('config\\app.yml'),
-    'config/app.yml',
-    'one spelling has to survive every platform, or the gist key differs by OS',
+  assert.equal(core.normalizeTrackedName('my file.yml'), 'my file.yml')
+  assert.throws(
+    () => core.normalizeTrackedName('config/app.yml'),
+    /a gist cannot hold a directory/,
+    'the reason has to name the real constraint, not a generic invalidity',
   )
 })
 
@@ -139,11 +145,13 @@ await check('profileFiles refuses a traversal entry and two spellings of one fil
     () => core.resolveProfileFiles({ profileFiles: ['../../outside.txt'] }),
     /invalid tracked file name/,
   )
-  assert.throws(
-    () => core.resolveProfileFiles({ profileFiles: ['a\\b.yml', 'a/b.yml'] }),
-    /duplicate tracked file name/,
-  )
-  assert.deepEqual(core.resolveProfileFiles({ profileFiles: ['a\\b.yml'] }), ['a/b.yml'])
+  if (process.platform === 'win32' || process.platform === 'darwin') {
+    assert.throws(
+      () => core.resolveProfileFiles({ profileFiles: ['a.yml', 'A.yml'] }),
+      /duplicate tracked file name/,
+    )
+  }
+  assert.deepEqual(core.resolveProfileFiles({ profileFiles: ['a.yml'] }), ['a.yml'])
   assert.deepEqual(core.resolveProfileFiles({}), ['cordis.patch.yml', 'package.json'])
 })
 
@@ -172,7 +180,7 @@ await check('a traversal in profileFiles cannot publish a file from outside the 
 
 /* ------------------------------------------------- escape via a link at rest -- */
 
-await check('a tracked file under a junction cannot be read or written outside the profile', async () => {
+await check('a tracked entry that is a junction out of the profile cannot be read or written', async () => {
   if (process.platform !== 'win32') return 'junctions are a Windows-only construct'
   const outside = path.join(root, 'outside-dir')
   await fs.mkdir(outside, { recursive: true })
@@ -186,24 +194,23 @@ await check('a tracked file under a junction cannot be read or written outside t
     return 'this environment does not allow creating a junction'
   }
 
-  const nested = { ...config, profileFiles: ['cordis.patch.yml', 'linked/credentials.txt'] }
+  // The tracked name is a single segment, and that segment is the junction.
+  const linked = { ...config, profileFiles: ['cordis.patch.yml', 'linked'] }
   await assert.rejects(
-    () => core.collectProfile('junction', nested),
+    () => core.collectProfile('junction', linked),
     /resolves outside the profile directory/,
   )
   await assert.rejects(
-    () => core.uploadProfile('junction', { ghPath, config: nested }),
+    () => core.uploadProfile('junction', { ghPath, config: linked }),
     /resolves outside/,
   )
 
-  // The write direction too: the gist is given the escaping name directly, since
-  // no upload could ever have produced it.
+  // The write direction too: a gist file claiming that name must not be written
+  // through the link.
   const uploaded = await core.uploadProfile('junction', { ghPath, config })
-  await core.gistPatch(ghPath, uploaded.gistId, {
-    files: { 'linked/credentials.txt': 'OVERWRITTEN\n' },
-  })
+  await core.gistPatch(ghPath, uploaded.gistId, { files: { linked: 'OVERWRITTEN\n' } })
   await assert.rejects(
-    () => core.downloadProfile('junction', { ghPath, config: nested, force: true }),
+    () => core.downloadProfile('junction', { ghPath, config: linked, force: true }),
     /resolves outside the profile directory/,
   )
   assert.equal(
@@ -250,66 +257,47 @@ await check('a tracked entry that IS the link out of the profile is refused', as
   assert.equal(await fs.readFile(outsideFile, 'utf8'), 'SHOULD-NOT-LEAK\n')
 })
 
-await check('a nested tracked file is still supported end to end', async () => {
-  await seed('nested', { 'config/app.yml': 'nested: 1\n' })
-  const nested = { ...config, profileFiles: ['config/app.yml'] }
-
-  const uploaded = await core.uploadProfile('nested', { ghPath, config: nested })
-  assert.deepEqual(uploaded.uploadedFiles, ['config/app.yml'])
-  const gist = await core.gistGet(ghPath, uploaded.gistId)
-  assert.deepEqual(Object.keys(gist.files), ['config/app.yml'])
-
-  await fs.writeFile(path.join(profileDir('nested'), 'config', 'app.yml'), 'nested: LOCAL\n', 'utf8')
-  await core.downloadProfile('nested', { ghPath, config: nested, force: true })
-  assert.equal(await read('nested', 'config/app.yml'), 'nested: 1\n')
-  assert.equal((await core.profileStatus('nested', { ghPath, config: nested })).status, 'in-sync')
-})
-
 /* ---------------------------------------------------- transactional download -- */
 
 await check('a download that fails part way leaves every file as it was', async () => {
-  await seed('atomic', { 'a.yml': 'A1\n', 'sub/b.yml': 'B1\n' })
-  const atomic = { ...config, profileFiles: ['a.yml', 'sub/b.yml'] }
+  if (process.platform !== 'win32') {
+    // The failure has to land *after* the first rename, and the only deterministic
+    // way to refuse a rename of one specific file is the read-only attribute,
+    // which only Windows honours here — POSIX rename(2) consults the directory,
+    // not the file.
+    return 'a mid-commit rename failure needs Windows file attributes'
+  }
+
+  await seed('atomic', { 'a.yml': 'A1\n', 'b.yml': 'B1\n' })
+  const atomic = { ...config, profileFiles: ['a.yml', 'b.yml'] }
   const uploaded = await core.uploadProfile('atomic', { ghPath, config: atomic })
 
   // A newer remote revision...
-  await core.gistPatch(ghPath, uploaded.gistId, { files: { 'a.yml': 'A2\n' } })
-  // ...and a local tree that cannot accept it: `sub` is now a regular file, so the
-  // second rename must fail after the first has already succeeded.
-  await fs.rm(path.join(profileDir('atomic'), 'sub'), { recursive: true })
-  await fs.writeFile(path.join(profileDir('atomic'), 'sub'), 'not a directory\n', 'utf8')
-
-  await assert.rejects(
-    () => core.downloadProfile('atomic', { ghPath, config: atomic, force: true }),
-    /were put back exactly as they were/,
-  )
-  assert.equal(
-    await read('atomic', 'a.yml'),
-    'A1\n',
-    'the file replaced before the failure must be rolled back, not left at the new revision',
-  )
-  assert.equal(await read('atomic', 'sub'), 'not a directory\n')
+  await core.gistPatch(ghPath, uploaded.gistId, {
+    files: { 'a.yml': 'A2\n', 'b.yml': 'B2\n' },
+  })
+  // ...and a target that refuses to be replaced, so the second rename fails after
+  // the first has already succeeded.
+  await fs.chmod(path.join(profileDir('atomic'), 'b.yml'), 0o444)
+  try {
+    await assert.rejects(
+      () => core.downloadProfile('atomic', { ghPath, config: atomic, force: true }),
+      /were put back exactly as they were/,
+    )
+    assert.equal(
+      await read('atomic', 'a.yml'),
+      'A1\n',
+      'the file replaced before the failure must be rolled back, not left at the new revision',
+    )
+    assert.equal(await read('atomic', 'b.yml'), 'B1\n')
+  } finally {
+    await fs.chmod(path.join(profileDir('atomic'), 'b.yml'), 0o666)
+  }
 
   const leftovers = (await fs.readdir(profileDir('atomic'))).filter((name) =>
     name.startsWith('.dsh-gist-settings-staging-'),
   )
   assert.deepEqual(leftovers, [], 'the staging directory must be cleaned up even when the commit fails')
-})
-
-await check('a download that fails on its first file changes nothing at all', async () => {
-  await seed('atomic2', { 'a.yml': 'A1\n', 'sub/b.yml': 'B1\n' })
-  const atomic = { ...config, profileFiles: ['sub/b.yml', 'a.yml'] }
-  const uploaded = await core.uploadProfile('atomic2', { ghPath, config: atomic })
-
-  await core.gistPatch(ghPath, uploaded.gistId, { files: { 'a.yml': 'A2\n' } })
-  await fs.rm(path.join(profileDir('atomic2'), 'sub'), { recursive: true })
-  await fs.writeFile(path.join(profileDir('atomic2'), 'sub'), 'not a directory\n', 'utf8')
-
-  await assert.rejects(
-    () => core.downloadProfile('atomic2', { ghPath, config: atomic, force: true }),
-    /were put back exactly as they were/,
-  )
-  assert.equal(await read('atomic2', 'a.yml'), 'A1\n', 'a file staged but never renamed must be untouched')
 })
 
 /* ----------------------------------------------------------- forced deletion -- */
@@ -462,6 +450,33 @@ await check('releasing a lock does not delete one another writer now owns', asyn
   await fs.rm(lockPath, { force: true })
 })
 
+await check('two waiters racing one stale lock cannot both enter the critical section', async () => {
+  const pid = await deadPid()
+  await fs.mkdir(stateDir, { recursive: true })
+  const logPath = path.join(root, 'stale-race.log')
+  // One stale lock, three waiters arriving together. Reclaiming by deleting the
+  // path lets two of them both decide the lock is free, and the second delete
+  // removes the first one's fresh lock — after which both are inside.
+  await fs.writeFile(lockPath, `${pid} ${os.hostname()}\n`, 'utf8')
+
+  const worker = path.join(here, 'lock-worker.mjs')
+  const start = (tag) => run(process.execPath, [worker, logPath, tag, '200', root])
+  await Promise.all([start('a'), start('b'), start('c')])
+
+  const lines = (await fs.readFile(logPath, 'utf8')).trim().split('\n')
+  assert.equal(lines.length, 6, `every worker must have run: ${lines.join(' ')}`)
+  for (let index = 0; index < lines.length; index += 2) {
+    const [tag, phase] = lines[index].split(':')
+    assert.equal(phase, 'in', `unexpected log line: ${lines.join(' ')}`)
+    assert.equal(
+      lines[index + 1],
+      `${tag}:out`,
+      `two critical sections overlapped: ${lines.join(' ')}`,
+    )
+  }
+  await fs.rm(lockPath, { force: true })
+})
+
 await check('the lock is released when the work throws, and a nested call is refused', async () => {
   await assert.rejects(
     () =>
@@ -481,38 +496,12 @@ await check('the lock is released when the work throws, and a nested call is ref
 
 /* ------------------------------------------------- nested names, for real -- */
 
-await check('a nested tracked file is restored into a parent directory that was deleted', async () => {
-  await seed('reparent', { 'config/app.yml': 'nested: v1\n' })
-  const nested = { ...config, profileFiles: ['config/app.yml'] }
-  const uploaded = await core.uploadProfile('reparent', { ghPath, config: nested })
-
-  // A new remote revision, and a profile whose `config` directory is gone: the
-  // download has to recreate it. Resolving a missing component must not shorten
-  // the path, or the content lands in a FILE named `config`.
-  await core.gistPatch(ghPath, uploaded.gistId, { files: { 'config/app.yml': 'nested: v2\n' } })
-  await fs.rm(path.join(profileDir('reparent'), 'config'), { recursive: true })
-
-  const result = await core.downloadProfile('reparent', { ghPath, config: nested, force: true })
-  assert.deepEqual(result.written, ['config/app.yml'])
-  assert.deepEqual(
-    await fs.readdir(profileDir('reparent')),
-    ['config'],
-    'the target must be a directory, not a file holding the content',
-  )
-  assert.equal(await read('reparent', 'config/app.yml'), 'nested: v2\n')
-  assert.equal((await core.profileStatus('reparent', { ghPath, config: nested })).status, 'in-sync')
-})
-
 await check('a tracked name that folds to another one is refused', async () => {
   // Both entries would stage to a single path, so the second rename could never
   // succeed and the profile could never be downloaded at all.
   if (process.platform === 'win32' || process.platform === 'darwin') {
     assert.throws(
       () => core.resolveProfileFiles({ profileFiles: ['a.txt', 'A.txt'] }),
-      /duplicate tracked file name/,
-    )
-    assert.throws(
-      () => core.resolveProfileFiles({ profileFiles: ['a\\b.txt', 'a/B.txt'] }),
       /duplicate tracked file name/,
     )
   }
@@ -532,24 +521,6 @@ await check('a tracked name that folds to another one is refused', async () => {
   }
 })
 
-await check('an ancestor and a descendant cannot both be tracked', async () => {
-  // Staging the file `a` and then `a/b.yml` would try to create `a` twice, and a
-  // gist holding both names could never be restored at all.
-  assert.throws(
-    () => core.resolveProfileFiles({ profileFiles: ['a', 'a/b.yml'] }),
-    /conflicting tracked file names/,
-  )
-  assert.throws(
-    () => core.resolveProfileFiles({ profileFiles: ['a/b.yml', 'a'] }),
-    /conflicting tracked file names/,
-  )
-  assert.deepEqual(
-    core.resolveProfileFiles({ profileFiles: ['a', 'ab/c.yml'] }),
-    ['a', 'ab/c.yml'],
-    'a shared prefix of characters is not a shared path segment',
-  )
-})
-
 /* --------------------------------------------------- cross-profile linking -- */
 
 await check('a tracked file linked to a sibling profile is refused', async () => {
@@ -557,14 +528,17 @@ await check('a tracked file linked to a sibling profile is refused', async () =>
   await seed('sibling-a', { 'package.json': '{"name":"sibling-a"}\n' })
   await seed('sibling-b', { 'package.json': '{"name":"sibling-b","secret":"BETA"}\n' })
 
-  const link = path.join(profileDir('sibling-a'), 'link')
+  const link = path.join(profileDir('sibling-a'), 'shared')
   try {
     await run('cmd', ['/c', 'mklink', '/J', link, profileDir('sibling-b')])
   } catch {
     return 'this environment does not allow creating a junction'
   }
 
-  const crossing = { ...config, profileFiles: ['package.json', 'link/package.json'] }
+  // A tracked name is one segment, and here that segment is a link into a sibling
+  // profile: reading it would publish that profile's config into this one's gist,
+  // and writing it would overwrite it.
+  const crossing = { ...config, profileFiles: ['package.json', 'shared'] }
   await assert.rejects(
     () => core.collectProfile('sibling-a', crossing),
     /resolves outside the profile directory/,
@@ -577,7 +551,7 @@ await check('a tracked file linked to a sibling profile is refused', async () =>
 
   // And the write direction must not reach the sibling either.
   const uploaded = await core.uploadProfile('sibling-a', { ghPath, config })
-  await core.gistPatch(ghPath, uploaded.gistId, { files: { 'link/package.json': '{"pwned":true}\n' } })
+  await core.gistPatch(ghPath, uploaded.gistId, { files: { shared: '{"pwned":true}\n' } })
   await assert.rejects(
     () => core.downloadProfile('sibling-a', { ghPath, config: crossing, force: true }),
     /resolves outside the profile directory/,
@@ -720,12 +694,11 @@ await check('a transport failure while fetching raw content falls back to gh', a
 
 /* ------------------------------------------------------------------- TOCTOU -- */
 
-await check('a directory swapped for a link mid-download cannot redirect the write out of the tree', async () => {
-  if (process.platform !== 'win32') return 'junctions are a Windows-only construct'
+await check('a profile directory swapped for a link mid-download cannot redirect the write out', async () => {
   const outside = path.join(root, 'swap-outside')
   await fs.mkdir(outside, { recursive: true })
 
-  const names = Array.from({ length: 300 }, (_, index) => `sub/f${String(index).padStart(3, '0')}.yml`)
+  const names = Array.from({ length: 300 }, (_, index) => `f${String(index).padStart(3, '0')}.yml`)
   const bulk = { ...config, profileFiles: names }
   await seed('swap', Object.fromEntries(names.map((name) => [name, `v: 0 # ${name}\n`])))
   const uploaded = await core.uploadProfile('swap', { ghPath, config: bulk })
@@ -733,11 +706,14 @@ await check('a directory swapped for a link mid-download cannot redirect the wri
     files: Object.fromEntries(names.map((name) => [name, `v: 1 # ${name}\n`])),
   })
 
-  // Swap `sub` for a junction the moment staging begins — the window in which the
-  // commit must not trust a path it resolved earlier. If the poller misses it the
-  // download simply succeeds, so this case can fail to detect, never fail wrongly.
+  // Replace the profile directory itself with a link the moment staging begins:
+  // that is the window in which the commit must not trust a path it resolved
+  // earlier. If the poller misses it the download simply succeeds, so this case
+  // can fail to detect, never fail wrongly.
   const dir = profileDir('swap')
+  const parked = `${dir}-parked`
   let swapped = false
+  let why = null
   const poller = setInterval(() => {
     if (swapped) return
     let staging = null
@@ -747,12 +723,26 @@ await check('a directory swapped for a link mid-download cannot redirect the wri
       return
     }
     if (!staging) return
-    swapped = true
     try {
-      fsSync.rmSync(path.join(dir, 'sub'), { recursive: true, force: true })
-      execFileSync('cmd', ['/c', 'mklink', '/J', path.join(dir, 'sub'), outside])
-    } catch {
-      swapped = false
+      fsSync.renameSync(dir, parked)
+      if (process.platform === 'win32') {
+        execFileSync('cmd', ['/c', 'mklink', '/J', dir, outside])
+      } else {
+        fsSync.symlinkSync(outside, dir, 'dir')
+      }
+      swapped = true
+    } catch (error) {
+      why = error.message.split('\n')[0]
+      // Put the directory back only if the rename actually moved it, then retry on
+      // the next tick: a single refused attempt must not take the fixture apart.
+      if (fsSync.existsSync(parked)) {
+        try {
+          fsSync.rmSync(dir, { recursive: true, force: true })
+          fsSync.renameSync(parked, dir)
+        } catch {
+          // Leave the tree as it is; the assertions below still hold.
+        }
+      }
     }
   }, 1)
 
@@ -767,56 +757,21 @@ await check('a directory swapped for a link mid-download cannot redirect the wri
     [],
     'no tracked file may be written outside the profile, however the download ended',
   )
-  await fs.rm(path.join(dir, 'sub'), { recursive: true, force: true }).catch(() => {})
+  // Put the real directory back so the summary's cleanup can remove the fixture.
+  await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
+  await fs.rename(parked, dir).catch(() => {})
 
-  // Reported rather than passed off as coverage: if the swap never landed, or the
-  // junction could not be created, this run proved nothing.
-  if (!swapped) return 'the swap did not land on this run, so nothing was exercised'
+  // Reported rather than passed off as coverage: if the swap never landed, this
+  // run proved nothing. On Windows it usually does not — the OS refuses to replace
+  // a directory that a download is actively writing through — which is itself
+  // worth knowing, and is why the per-item re-resolution is defence in depth
+  // rather than the only thing standing between a swap and an out-of-tree write.
+  if (!swapped) {
+    return `the swap did not land on this run${why ? ` (${why})` : ''}, so nothing was exercised`
+  }
 })
 
 /* ------------------------------------------------- deeper trees and tidy-ups -- */
-
-await check('a two-level nested tracked file is restored into a deleted tree', async () => {
-  await seed('deep', { 'a/b/c.yml': 'deep: v1\n' })
-  const deep = { ...config, profileFiles: ['a/b/c.yml'] }
-  const uploaded = await core.uploadProfile('deep', { ghPath, config: deep })
-  await core.gistPatch(ghPath, uploaded.gistId, { files: { 'a/b/c.yml': 'deep: v2\n' } })
-  await fs.rm(path.join(profileDir('deep'), 'a'), { recursive: true })
-
-  // Two missing components, so the directories have to be created shallowest
-  // first. Every other nested fixture here is one level deep and cannot tell.
-  const result = await core.downloadProfile('deep', { ghPath, config: deep, force: true })
-  assert.deepEqual(result.written, ['a/b/c.yml'])
-  assert.equal(await read('deep', 'a/b/c.yml'), 'deep: v2\n')
-  assert.deepEqual((await fs.readdir(profileDir('deep'))).sort(), ['a'])
-  assert.equal((await core.profileStatus('deep', { ghPath, config: deep })).status, 'in-sync')
-})
-
-await check('a failed commit takes back the directories it created', async () => {
-  await seed('tidydirs', { 'new/x.yml': 'X1\n', 'blocked/y.yml': 'Y1\n' })
-  const tidy = { ...config, profileFiles: ['new/x.yml', 'blocked/y.yml'] }
-  const uploaded = await core.uploadProfile('tidydirs', { ghPath, config: tidy })
-  await core.gistPatch(ghPath, uploaded.gistId, {
-    files: { 'new/x.yml': 'X2\n', 'blocked/y.yml': 'Y2\n' },
-  })
-
-  // `new/` is gone, so the commit has to create it; `blocked` is a regular file,
-  // so the second rename must fail after the first one succeeded.
-  const dir = profileDir('tidydirs')
-  await fs.rm(path.join(dir, 'new'), { recursive: true })
-  await fs.rm(path.join(dir, 'blocked'), { recursive: true })
-  await fs.writeFile(path.join(dir, 'blocked'), 'not a directory\n', 'utf8')
-
-  await assert.rejects(
-    () => core.downloadProfile('tidydirs', { ghPath, config: tidy, force: true }),
-    /were put back exactly as they were/,
-  )
-  assert.deepEqual(
-    (await fs.readdir(dir)).sort(),
-    ['blocked'],
-    'the directory the commit created must be taken back, not left behind',
-  )
-})
 
 await check('a profile is still resolved when its whole profiles directory is gone', async () => {
   const home = path.join(root, 'vanished-home')
@@ -838,28 +793,21 @@ await check('a profile is still resolved when its whole profiles directory is go
 })
 
 await check('two tracked names that resolve to one file are refused', async () => {
-  if (process.platform !== 'win32') return 'junctions are a Windows-only construct'
-  await seed('aliased', { 'real/f.yml': 'AAAA\n' })
-  const link = path.join(profileDir('aliased'), 'link')
-  try {
-    await run('cmd', ['/c', 'mklink', '/J', link, path.join(profileDir('aliased'), 'real')])
-  } catch {
-    return 'this environment does not allow creating a junction'
-  }
+  await seed('aliased', { 'a.yml': 'AAAA\n' })
+  // A hard link is a second name for one file, and creating one needs no
+  // privilege. Both entries would stage, both would rename, and the second would
+  // silently undo the first while the result claimed both had been written.
+  await fs.link(path.join(profileDir('aliased'), 'a.yml'), path.join(profileDir('aliased'), 'b.yml'))
 
-  // Different names, one file. Both would stage, both would rename, and the second
-  // would silently undo the first while the report claimed both were written.
-  const aliased = { ...config, profileFiles: ['link/f.yml', 'real/f.yml'] }
+  const aliased = { ...config, profileFiles: ['a.yml', 'b.yml'] }
   const uploaded = await core.uploadProfile('aliased', { ghPath, config: aliased })
-  await core.gistPatch(ghPath, uploaded.gistId, {
-    files: { 'link/f.yml': 'BBBB\n', 'real/f.yml': 'BBBB\n' },
-  })
+  await core.gistPatch(ghPath, uploaded.gistId, { files: { 'a.yml': 'BBBB\n', 'b.yml': 'BBBB\n' } })
 
   await assert.rejects(
     () => core.downloadProfile('aliased', { ghPath, config: aliased, force: true }),
     /resolve to the same file/,
   )
-  assert.equal(await read('aliased', 'real/f.yml'), 'AAAA\n', 'and nothing may be written')
+  assert.equal(await read('aliased', 'a.yml'), 'AAAA\n', 'and nothing may be written')
 })
 
 await check('pruning still sees an untracked file whose content was never fetched', async () => {
@@ -892,6 +840,37 @@ await check('a raw response that does not report its final URL is refused', asyn
   } finally {
     delete process.env.FAKE_GH_TRUNCATE
   }
+})
+
+await check('a stale-baseline repair does not overwrite a baseline another writer advanced', async () => {
+  await seed('cas', { 'cordis.patch.yml': 'A1\n' })
+  const one = { ...config, profileFiles: ['cordis.patch.yml'] }
+  const uploaded = await core.uploadProfile('cas', { ghPath, config: one })
+
+  // Both sides now agree on a new revision, so the recorded baseline is merely
+  // stale and a status call would repair it...
+  await fs.writeFile(path.join(profileDir('cas'), 'cordis.patch.yml'), 'A2\n', 'utf8')
+  await core.gistPatch(ghPath, uploaded.gistId, { files: { 'cordis.patch.yml': 'A2\n' } })
+
+  // ...but this call observed the OLD record, and another writer has already
+  // advanced the stored baseline past it. Repairing from what this run saw would
+  // move the baseline backwards and turn the next ordinary edit into a false
+  // divergence.
+  const observed = await core.loadState(config)
+  observed.profiles.cas.lastSyncedHash = core.hashFiles({ 'cordis.patch.yml': 'A1\n' })
+
+  const advanced = await core.loadState(config)
+  const newer = core.hashFiles({ 'cordis.patch.yml': 'A3\n' })
+  advanced.profiles.cas.lastSyncedHash = newer
+  await core.saveState(advanced, config)
+
+  const status = await core.profileStatus('cas', { ghPath, config: one, state: observed })
+  assert.equal(status.status, 'in-sync')
+  assert.equal(
+    (await core.loadState(config)).profiles.cas.lastSyncedHash,
+    newer,
+    'a repair must be a compare-and-set, not a blind write',
+  )
 })
 
 /* ------------------------------------------------------------ raw transfer -- */

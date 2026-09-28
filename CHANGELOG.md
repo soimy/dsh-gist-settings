@@ -18,22 +18,45 @@ in `test/live.test.mjs`. Every one of them fails if its fix is reverted.
 
 ### Fixed
 
+- **Nested tracked names were advertised and cannot work.** A gist is a flat collection of files, and
+  GitHub answers a filename containing a slash with `HTTP 422 Validation Failed` — verified against the
+  real API, and now pinned by `test/live.test.mjs`. So `profileFiles: ['config/app.yml']` did not merely
+  have rough edges: the first upload of such a configuration failed outright, and only the fake-gh
+  suites ever exercised it. A tracked name must now be a single name, with no separator, and the
+  local-path machinery that existed only for nesting — staging subdirectories, creating missing parents,
+  ancestor/descendant conflict detection — went with it. A backslash is refused too: it is legal in a
+  gist filename but separates paths on Windows, so accepting it would mean one name for the file and
+  another for the gist. The live suite fails if the API ever changes its mind, so this can be revisited
+  rather than staying quietly wrong.
+- **Reclaiming a stale lock could delete a live one.** Two waiters could both read the same abandoned
+  lock; the first would remove it, write its own and enter the critical section, and the second's
+  removal then deleted a lock that was by then live, after which both proceeded believing they held it —
+  reopening the lost-update and duplicate-gist failures the lock exists to prevent. Takeover now *moves*
+  the stale file aside with an atomic rename, which only one waiter can win; the loser goes back to
+  competing for the exclusive create, the one operation that grants the lock. Pinned by a case that races
+  three waiters against one stale lock.
+- **The stale-baseline repair could move the baseline backwards.** A status call computed the local and
+  remote hashes before taking the state lock, and then wrote the baseline it had observed. If another
+  writer advanced the record in between — uploading a newer revision and recording its hash — the repair
+  overwrote the newer baseline with the older one, and the next ordinary edit looked like a divergence.
+  The write is now a compare-and-set on the gist id and the baseline this call actually observed, and is
+  skipped when the record has moved.
 - **Tracked-file paths could still leave the profile directory.** Containment covered
   `profiles/<name>` but not the files inside it, so a `profileFiles` entry of
   `../../some-secret-file` — or a tracked file that was itself a link out of the tree, or that sat
   under a linked subdirectory — was read and published by an upload and overwritten by a download.
   Every name is now validated as a plain relative path, and every segment of its resolved path is
-  checked. Nested names such as `config/app.yml` are still supported.
+  checked. A tracked name is a single name with no separator and no `..`.
 - **Containment held at the wrong boundary.** A tracked file was checked against the profiles
   directory rather than the profile's own, so a junction pointing at a *sibling* profile let one
   profile's gist publish another profile's config and then overwrite it, breaking the
   one-gist-per-profile invariant. The boundary is now the profile directory, and the check is repeated
   immediately before each write instead of once per operation.
-- **A download could write a nested file under its parent's name.** Resolving a path whose parent
-  directory did not exist returned the shortened path, so restoring `config/app.yml` into a profile
-  without `config/` wrote the content into a *file* named `config`, reported success, and left the
-  profile unable to converge. The full path is returned, and a missing parent directory is created
-  immediately before the rename and taken back if the commit fails.
+- **A download could write a file under a directory's name.** Resolving a path whose parent
+  directory did not exist returned the shortened path, so restoring a nested tracked file into a
+  profile without its parent wrote the content into a *file* named after the directory, reported
+  success, and left the profile unable to converge. The resolver now returns the whole path, never a
+  prefix of it. (Nested names themselves turned out to be unsupported by the API — see above.)
 - **A path could be swapped for a link between the check and the write.** Targets were resolved once,
   then written after a staging phase whose length is proportional to the payload; a directory replaced
   by a junction in that window redirected the write out of the tree. Each target is re-resolved
@@ -78,15 +101,10 @@ in `test/live.test.mjs`. Every one of them fails if its fix is reverted.
   that check applies only where the filesystem normalises: NTFS stores names verbatim, so there the two
   spellings are two real files and refusing them would be a false refusal.
 - **Two tracked names that *denote* one file were still accepted.** Folding the name catches two
-  spellings, not two paths: a junction alias (`link/f.yml` where `link` points at `real`) or a Windows
-  8.3 short name made both entries write to one file, so the second silently discarded the first while
-  the result claimed both had been written. Write targets are now identified by file id, or by resolved
-  parent plus name when the file does not exist yet, and a collision is refused before anything is
-  staged.
-- **`profileFiles` accepted an ancestor and a descendant** (`a` and `a/b.yml`), which made staging try
-  to create `a` twice. A gist holding both names — from a hand edit, the web UI, or another layout —
-  could not be restored at all, and the error named an internal staging directory. Such a set is now
-  refused, and a profile is still configurable with names that merely share leading characters.
+  spellings, not two paths: a hard link, or a Windows 8.3 short name, makes both entries name one file,
+  so the second silently discarded the first while the result claimed both had been written. Write
+  targets are now identified by file id, or by resolved parent plus name when the file does not exist
+  yet, and a collision is refused before anything is staged.
 - **The post-redirect host check was skipped whenever a response reported no final URL**, which is a
   shape a response stub has by default. The final URL is now required: a response that cannot be shown
   to have stayed on a GitHub host is refused.
@@ -100,8 +118,6 @@ in `test/live.test.mjs`. Every one of them fails if its fix is reverted.
   a state write that fails after an upload says the gist exists rather than implying it does not.
 - **`gist_status` advised `gh auth login` when `gh` was not installed**, because a missing `gh` left no
   auth state to report. It now says auth was not checked.
-- `backupProfile` did not create intermediate directories, so a nested tracked file made the backup
-  fail and took the whole download with it.
 - A tracked file whose parent was a regular file surfaced a bare `ENOTDIR` instead of being reported
   as absent, which hid the real cause from the error the user eventually saw.
 

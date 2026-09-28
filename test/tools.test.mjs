@@ -247,7 +247,7 @@ await check('apply() refuses a profileFiles entry that could leave the profile',
     () =>
       apply({ ...ctx, tools: { register: () => () => {} }, effect: () => () => {} }, {
         dshHome: root,
-        profileFiles: ['config\\app.yml', 'config/app.yml'],
+        profileFiles: ['package.json', 'PACKAGE.JSON'],
       }),
     /duplicate tracked file name/,
   )
