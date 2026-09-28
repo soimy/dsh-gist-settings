@@ -38,7 +38,7 @@
     "release:notes": "node scripts/release-notes.mjs"
   },
   "engines": {
-    "node": ">=20.3.0"
+    "node": "^22.19 || >=24"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh": "0.1.7-rc.2"

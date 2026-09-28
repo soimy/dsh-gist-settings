@@ -95,7 +95,9 @@ a case that fails before your change.
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs `npm test` — the same command you run — on Linux, Windows and macOS at
-Node 20.x, 22.x and 24.x, plus one leg on **20.3.0**, the floor `engines` names. The platform matrix is
+Node 22.x and 24.x, plus one leg on **22.19.0**, the floor `engines` names. That floor is the Harness's,
+not the engine's: `@deepseek-harness-tui/dsh-tui` declares `engines: ^22.19 || >=24`, and a plugin
+nothing can load is not supported by anything. The platform matrix is
 not padding: containment takes a different path per OS (junctions and reserved device names on Windows,
 Unicode normalisation on macOS, rename-over-a-file semantics everywhere), so a green Linux run says
 nothing about the code path a Windows user gets.
@@ -292,7 +294,7 @@ plugin_manager  action: install_bundle  target: <此仓库的绝对路径>
 
 ### 持续集成
 
-`.github/workflows/ci.yml` 跑的就是 `npm test`——与你在本地跑的同一条命令——覆盖 Linux、Windows、macOS 三个平台与 Node 20.x、22.x、24.x，另加一条直接在 **20.3.0**（`engines` 声明的下限）上跑的支线。平台矩阵不是凑数：目录包容在每个系统上走的是不同代码路径（Windows 上是 junction 与保留设备名，macOS 上是 Unicode 规范化，各处的 rename-over-file 语义也不同），所以 Linux 全绿并不能说明 Windows 用户拿到的路径是对的。
+`.github/workflows/ci.yml` 跑的就是 `npm test`——与你在本地跑的同一条命令——覆盖 Linux、Windows、macOS 三个平台与 Node 22.x、24.x，另加一条直接在 **22.19.0**（`engines` 声明的下限）上跑的支线。这个下限来自 Harness 而非引擎本身：`@deepseek-harness-tui/dsh-tui` 声明 `engines: ^22.19 || >=24`，而一个根本加载不了的环境谈不上"支持"。平台矩阵不是凑数：目录包容在每个系统上走的是不同代码路径（Windows 上是 junction 与保留设备名，macOS 上是 Unicode 规范化，各处的 rename-over-file 语义也不同），所以 Linux 全绿并不能说明 Windows 用户拿到的路径是对的。
 
 其中三点是刻意的：
 

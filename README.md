@@ -19,7 +19,7 @@ guarded two-way sync are exposed as agent tools, so you can drive them from a co
 | Host plugin + agent tools | **Installed and live**; callable from a session |
 | Real GitHub round-trip | **Verified** against a real account |
 | Test suite | **180 offline cases across seven suites, plus 12 live cases**, all passing |
-| CI | Offline suites and repository checks on Linux, Windows and macOS, Node 20.3, 20.x, 22.x and 24.x |
+| CI | Offline suites and repository checks on Linux, Windows and macOS, Node 22.19.0, 22.x and 24.x |
 | Client settings page | Not started — see [The settings page](#the-settings-page) |
 | Licence | MIT |
 
@@ -33,11 +33,13 @@ changelog conventions, and [CHANGELOG.md](CHANGELOG.md) for what has changed.
 
 ## Requirements
 
-- **Node.js 20.3+** — the engine uses `node:`-prefixed built-ins, `AsyncLocalStorage` to catch a nested
-  lock, and `AbortSignal.any` to put one deadline on the global `fetch` that reads truncated gist
-  content. That last one is why the floor is 20.3 rather than 20.0: on 20.0–20.2 the plugin loads and
-  then fails the first time it has to read a file above the API's truncation threshold.
-  `.github/workflows/ci.yml` runs the suites on 20.3.0 itself, so the floor is tested rather than claimed.
+- **Node.js 22.19 or newer**, which is the Harness's own requirement rather than this plugin's:
+  `@deepseek-harness-tui/dsh-tui` declares `engines: { node: "^22.19 || >=24" }`, and nothing can load a
+  Harness plugin without a Harness. The engine's own code needs less — `node:`-prefixed built-ins,
+  `AsyncLocalStorage`, and `AbortSignal.any` (20.3) to put one deadline on the global `fetch` that reads
+  truncated gist content — but a floor nobody can run the plugin on is not a floor worth naming, so
+  `engines` here says what the platform actually supports. `.github/workflows/ci.yml` runs a leg on
+  **22.19.0** itself, so the claim is tested rather than asserted.
 - **`gh` CLI, installed and authenticated.**
 
   ```bash

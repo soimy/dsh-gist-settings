@@ -20,8 +20,9 @@ in `test/live.test.mjs`. Every one of them fails if its fix is reverted.
 
 ### Added
 
-- **Continuous integration.** `npm test` now runs on Linux, Windows and macOS at Node 20.x, 22.x and
-  24.x, plus one leg on 20.3.0 — the floor `engines` names. The platform matrix is not decoration: the
+- **Continuous integration.** `npm test` now runs on Linux, Windows and macOS at Node 22.x and 24.x,
+  plus one leg on 22.19.0 — the floor `engines` names, which is the Harness's rather than the engine's.
+  The platform matrix is not decoration: the
   containment checks take a different path per OS (junctions and reserved device names on Windows,
   Unicode normalisation on macOS, rename-over-a-file semantics everywhere), so a green Linux run says
   nothing about what a Windows user gets. No install step is needed, because the package has no
@@ -88,11 +89,21 @@ in `test/live.test.mjs`. Every one of them fails if its fix is reverted.
 - **The release-notes script accepted an empty section.** When the tagged version was the last section in
   the file, extraction ran on into the link definitions below it, so a section with no entries of its own
   looked non-empty and those definitions would have been published as the release notes.
+- **The release job ran the Harness on a Node version the Harness does not support.** It pinned 20.3.0 —
+  this package's own floor — and the first `v0.2.0` tag failed there, in `test/schema.test.mjs`, with the
+  install reporting nine packages instead of five hundred. Nothing was wrong with the plugin: npm 9,
+  which 20.3 bundles, resolved the Harness's dependency tree to almost nothing. `@deepseek-harness-tui/dsh-tui`
+  declares `engines: ^22.19 || >=24`, so 20.3 was never a supported place to run any of this. The
+  Harness-dependent jobs now use that floor, the install action resolves `dsh-tools` from the Harness's
+  own location instead of assuming npm hoisted it, and it fails with that explanation if the tools are
+  missing — the failure above arrived as a test failure, several steps from its cause.
 - **`engines` claimed Node 20.0.0; the code needs 20.3.0.** `AbortSignal.any`, which puts one deadline
   on the `fetch` that reads truncated gist content, arrived in 20.3. On 20.0–20.2 the plugin therefore
-  loaded and then failed the first time it read a file above the API's truncation threshold. The floor
-  is now 20.3.0, both READMEs say so, and CI runs a leg on 20.3.0 itself, so the claim is tested rather
-  than asserted.
+  loaded and then failed the first time it read a file above the API's truncation threshold. That fixed
+  the code's own floor, and the release job's failure above showed the floor that matters is narrower:
+  a Harness plugin only runs inside a Harness, and the Harness needs `^22.19 || >=24`. `engines` now says
+  that, both READMEs explain the difference between the two floors, and CI runs a leg on 22.19.0 itself,
+  so the claim is tested rather than asserted.
 - **A tracked file named `rollback` could abort the whole rollback.** The restore copies went into a fixed
   `rollback` subdirectory of the staging directory, so a profile tracking a file by that name — one not
   yet committed, whose staged copy still occupied the path — made creating that directory throw. Every
