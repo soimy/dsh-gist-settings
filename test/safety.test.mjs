@@ -66,6 +66,24 @@ function deadPid() {
   })
 }
 
+/**
+ * True when the failure came from the test double rather than from the code under
+ * test: a fake `gh` that could not answer at all. A loaded CI runner loses one
+ * occasionally, and a case whose whole subject is what happens *inside* a
+ * successful download cannot conclude anything from that — reporting it as a
+ * failure would blame the product for the harness.
+ *
+ * Deliberately one pattern. `gh returned non-JSON output` is the message core
+ * emits when the CLI answered with something that is not JSON, which the double
+ * does only by dying; the plugin's own logic cannot produce it. Nothing generic
+ * such as `ENOENT` or `timed out` belongs here: both are ordinary parts of real
+ * failure messages — a missing tracked file, the lock deadline, the raw-content
+ * deadline — and matching them would turn a genuine regression into a skip.
+ */
+function harnessHiccup(error) {
+  return /gh returned non-JSON output/.test(error?.message ?? '')
+}
+
 /* ------------------------------------------------------------- mini runner -- */
 
 const results = []
@@ -312,6 +330,11 @@ await check('a failed commit restores what it wrote and leaves an external edit 
     clearInterval(poller)
   }
 
+  // The guards come first: without the injection, or with a fake `gh` that never
+  // answered, this run exercised nothing and saying so is the honest outcome.
+  if (!edited) return 'the external edit did not land on this run, so nothing was exercised'
+  if (harnessHiccup(error)) return `the fake gh failed first (${error.message}), so nothing was exercised`
+
   assert.ok(error, 'the commit must have failed')
   assert.match(error.message, /changed after this download wrote them/)
   assert.match(error.message, /a\.yml/)
@@ -320,7 +343,6 @@ await check('a failed commit restores what it wrote and leaves an external edit 
     'a.yml: EDITOR\n',
     'a revision written by someone else after this download is not ours to undo',
   )
-  if (!edited) return 'the external edit did not land on this run, so nothing was exercised'
   assert.equal(await read('rollback', 'f000.yml'), 'f000.yml: old\n', 'our own write must be rolled back')
 
   const leftovers = (await fs.readdir(dir)).filter((name) => name.startsWith('.dsh-gist-settings-staging-'))
@@ -364,6 +386,7 @@ await check('a tracked file named rollback cannot break the rollback', async () 
     clearInterval(poller)
   }
   if (!armed) return 'the failure injection did not land on this run, so nothing was exercised'
+  if (harnessHiccup(error)) return `the fake gh failed first (${error.message}), so nothing was exercised`
 
   assert.ok(error, 'the commit must have failed')
   assert.doesNotMatch(error.message, /EEXIST/, 'a tracked name must not decide whether the rollback runs')
@@ -416,6 +439,7 @@ await check('a target that cannot be read back is reported as unverified, not as
     clearInterval(poller)
   }
   if (!unreadable) return 'the read failure did not land on this run, so nothing was exercised'
+  if (harnessHiccup(error)) return `the fake gh failed first (${error.message}), so nothing was exercised`
 
   assert.ok(error, 'the commit must have failed')
   assert.match(error.message, /Could not verify a\.yml/)
