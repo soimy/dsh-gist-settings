@@ -1132,61 +1132,52 @@ await check('a raw request that fails at the transport falls back, and reports a
 
 /* --------------------------------------------------------- state write failure -- */
 
-await check('a download whose baseline cannot be recorded says the files are in place', async () => {
-  // The commit has to succeed and only the state write fail, so the injection has
-  // to land *after* the state was read. Two things that look like they would do it
-  // do not: a read-only `state.json` cannot fail the replace, because POSIX
-  // rename(2) consults the directory rather than the file; and a read-only state
-  // *directory* fails the state lock first — that lock is created in the same
-  // directory — so nothing is downloaded at all, which is a different outcome, and
-  // one this case pins separately below.
-  //
-  // So the injection waits for the staging directory, which only appears after the
-  // state was read, and replaces `state.json` with a directory while the commit is
-  // running: the temp write still succeeds, and the atomic replace over a directory
-  // cannot. The extra files give the poller the same wide window the cases above
-  // rely on.
-  const names = ['cordis.patch.yml', ...Array.from({ length: 50 }, (_, index) => `f${index}.yml`)]
-  const solo = { ...config, profileFiles: names }
-  await seed('unrecorded', Object.fromEntries(names.map((name) => [name, `${name}: v1\n`])))
+await check('a baseline that cannot be recorded is reported honestly', async () => {
+  await seed('unrecorded', { 'cordis.patch.yml': 's: v1\n' })
+  const solo = { ...config, profileFiles: ['cordis.patch.yml'] }
   const uploaded = await core.uploadProfile('unrecorded', { ghPath, config: solo })
-  await core.gistPatch(ghPath, uploaded.gistId, {
-    files: Object.fromEntries(names.map((name) => [name, `${name}: v2\n`])),
-  })
+  await core.gistPatch(ghPath, uploaded.gistId, { files: { 'cordis.patch.yml': 's: v2\n' } })
 
+  // The state *lock* is created in the same directory as the state file, so how the
+  // write is blocked decides which failure this exercises, and the two platforms
+  // cannot be given the same one:
+  //
+  //   Windows — a read-only state file. The lock is unaffected and only the atomic
+  //   replace fails, which is the branch worth pinning: the commit has already
+  //   happened, so the report must say the files are in place rather than claiming
+  //   a lost download.
+  //
+  //   POSIX — no permission change can fail that replace, because rename(2) consults
+  //   the directory rather than the file; and a read-only directory fails the lock
+  //   first, before anything is fetched. The property forceable there is worth as
+  //   much: an unwritable state directory never half-applies anything.
+  //
+  // Both are deterministic, which is why neither is a timing trick: an injected
+  // change mid-operation would either need a race to land or fail on a loaded
+  // runner, and a case that skips proves nothing.
   const stateFile = path.join(stateDir, 'state.json')
-  const record = await fs.readFile(stateFile, 'utf8')
-  let armed = false
-  const poller = setInterval(() => {
-    if (armed) return
-    try {
-      const staging = fsSync
-        .readdirSync(profileDir('unrecorded'))
-        .some((name) => name.startsWith('.dsh-gist-settings-staging-'))
-      if (!staging) return
-      fsSync.rmSync(stateFile, { force: true })
-      fsSync.mkdirSync(stateFile)
-      armed = true
-    } catch {
-      // The staging directory is not there yet; try again next tick.
-    }
-  }, 1)
+  const onWindows = process.platform === 'win32'
+  const block = () => (onWindows ? fs.chmod(stateFile, 0o444) : fs.chmod(stateDir, 0o555))
+  const unblock = () => (onWindows ? fs.chmod(stateFile, 0o666) : fs.chmod(stateDir, 0o755))
+  const downloadProblem = onWindows ? /files are in place/ : /EACCES|permission denied/i
+  const uploadProblem = onWindows ? /recording it in .* failed/ : /EACCES|permission denied/i
 
+  await block()
   try {
     await assert.rejects(
       () => core.downloadProfile('unrecorded', { ghPath, config: solo, force: true }),
-      /files are in place/,
-      'a failure after the commit must not be reported as a lost download',
+      downloadProblem,
+      onWindows
+        ? 'a failure after the commit must not be reported as a lost download'
+        : 'an unwritable state directory must fail before anything is written',
     )
   } finally {
-    clearInterval(poller)
+    await unblock()
   }
-  if (!armed) return 'the injection did not land on this run, so nothing was exercised'
-
   assert.equal(
     await read('unrecorded', 'cordis.patch.yml'),
-    'cordis.patch.yml: v2\n',
-    'the download itself succeeded',
+    onWindows ? 's: v2\n' : 's: v1\n',
+    onWindows ? 'the download itself succeeded' : 'nothing may be downloaded',
   )
   assert.deepEqual(
     (await fs.readdir(stateDir)).filter((name) => name.endsWith('.tmp')),
@@ -1194,39 +1185,24 @@ await check('a download whose baseline cannot be recorded says the files are in 
     'a half-written temp file must not be left behind',
   )
 
-  // Put the state file back for the upload direction below.
-  await fs.rm(stateFile, { recursive: true, force: true })
-  await fs.writeFile(stateFile, record, 'utf8')
-
-  // The upload direction, where the gist really was updated, so the report has to
-  // say that rather than implying it was not.
-  //
-  // On Windows a read-only state file leaves the lock alone and fails the replace.
-  // Elsewhere permissions cannot fail the replace at all, so the state directory is
-  // made unwritable instead — and the honest assertion there is the stronger one:
-  // the upload fails *before* the gist is touched, so a state directory nobody can
-  // write never half-applies anything.
-  await fs.writeFile(
-    path.join(profileDir('unrecorded'), 'cordis.patch.yml'),
-    'cordis.patch.yml: v3\n',
-    'utf8',
-  )
-  const onWindows = process.platform === 'win32'
-  if (onWindows) await fs.chmod(stateFile, 0o444)
-  else await fs.chmod(stateDir, 0o555)
+  // The same for the upload direction: on Windows the gist really was updated, so
+  // the report has to say that rather than implying it was not; on POSIX the gist
+  // must still hold the previous revision, because the lock is taken before
+  // anything is patched or created.
+  await fs.writeFile(path.join(profileDir('unrecorded'), 'cordis.patch.yml'), 's: v3\n', 'utf8')
+  await block()
   try {
     await assert.rejects(
       () => core.uploadProfile('unrecorded', { ghPath, config: solo }),
-      onWindows ? /recording it in .* failed/ : /EACCES|permission denied/i,
+      uploadProblem,
+      onWindows ? 'the gist was updated, so the report must not imply otherwise' : 'nothing may be published',
     )
   } finally {
-    if (onWindows) await fs.chmod(stateFile, 0o666)
-    else await fs.chmod(stateDir, 0o755)
+    await unblock()
   }
   assert.equal(
     (await core.gistGet(ghPath, uploaded.gistId)).files['cordis.patch.yml'],
-    onWindows ? 'cordis.patch.yml: v3\n' : 'cordis.patch.yml: v2\n',
-    onWindows ? 'the gist was updated, so the report must not imply otherwise' : 'nothing may be published',
+    onWindows ? 's: v3\n' : 's: v2\n',
   )
   assert.deepEqual(
     (await fs.readdir(stateDir)).filter((name) => name.endsWith('.tmp')),
