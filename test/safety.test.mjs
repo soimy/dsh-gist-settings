@@ -118,6 +118,11 @@ await check('a tracked name that could leave the profile directory is refused', 
     'C:relative.txt',
     'a\u0000b.yml',
     'file:stream',
+    // Reserved for devices on Windows, with or without an extension.
+    'NUL',
+    'nul.txt',
+    'COM1.yml',
+    'aux',
     'trailing.',
     'trailing ',
     '',
@@ -259,44 +264,66 @@ await check('a tracked entry that IS the link out of the profile is refused', as
 
 /* ---------------------------------------------------- transactional download -- */
 
-await check('a download that fails part way leaves every file as it was', async () => {
-  if (process.platform !== 'win32') {
-    // The failure has to land *after* the first rename, and the only deterministic
-    // way to refuse a rename of one specific file is the read-only attribute,
-    // which only Windows honours here — POSIX rename(2) consults the directory,
-    // not the file.
-    return 'a mid-commit rename failure needs Windows file attributes'
-  }
-
-  await seed('atomic', { 'a.yml': 'A1\n', 'b.yml': 'B1\n' })
-  const atomic = { ...config, profileFiles: ['a.yml', 'b.yml'] }
-  const uploaded = await core.uploadProfile('atomic', { ghPath, config: atomic })
-
-  // A newer remote revision...
+await check('a failed commit restores what it wrote and leaves an external edit alone', async () => {
+  // Three behaviours in one commit: `a.yml` is replaced by this download and then
+  // rewritten by someone else, `f000.yml` is replaced and left alone, and `c.yml`
+  // becomes a directory so the commit fails after both. The rollback has to put
+  // `f000.yml` back, leave the editor's `a.yml` alone, and say so.
+  const bulkNames = ['a.yml', ...Array.from({ length: 300 }, (_, index) => `f${String(index).padStart(3, '0')}.yml`), 'c.yml']
+  const bulk = { ...config, profileFiles: bulkNames }
+  const before = Object.fromEntries(bulkNames.map((name) => [name, `${name}: old\n`]))
+  await seed('rollback', before)
+  const uploaded = await core.uploadProfile('rollback', { ghPath, config: bulk })
   await core.gistPatch(ghPath, uploaded.gistId, {
-    files: { 'a.yml': 'A2\n', 'b.yml': 'B2\n' },
+    files: Object.fromEntries(bulkNames.map((name) => [name, `${name}: new\n`])),
   })
-  // ...and a target that refuses to be replaced, so the second rename fails after
-  // the first has already succeeded.
-  await fs.chmod(path.join(profileDir('atomic'), 'b.yml'), 0o444)
+
+  // The extra files give the poller a wide window: it triggers on staging, then
+  // waits for `a.yml` to hold the new revision — which only happens once the
+  // commit has renamed it — before overwriting it.
+  const dir = profileDir('rollback')
+  let armed = false
+  let edited = false
+  const poller = setInterval(() => {
+    if (edited) return
+    try {
+      if (!armed) {
+        if (!fsSync.readdirSync(dir).some((name) => name.startsWith('.dsh-gist-settings-staging-'))) return
+        fsSync.rmSync(path.join(dir, 'c.yml'), { recursive: true, force: true })
+        fsSync.mkdirSync(path.join(dir, 'c.yml'))
+        armed = true
+        return
+      }
+      if (fsSync.readFileSync(path.join(dir, 'a.yml'), 'utf8') === 'a.yml: new\n') {
+        fsSync.writeFileSync(path.join(dir, 'a.yml'), 'a.yml: EDITOR\n')
+        edited = true
+      }
+    } catch {
+      // The staging directory or the file may not exist yet; try again next tick.
+    }
+  }, 1)
+
+  let error = null
   try {
-    await assert.rejects(
-      () => core.downloadProfile('atomic', { ghPath, config: atomic, force: true }),
-      /were put back exactly as they were/,
-    )
-    assert.equal(
-      await read('atomic', 'a.yml'),
-      'A1\n',
-      'the file replaced before the failure must be rolled back, not left at the new revision',
-    )
-    assert.equal(await read('atomic', 'b.yml'), 'B1\n')
+    await core.downloadProfile('rollback', { ghPath, config: bulk, force: true }).catch((thrown) => {
+      error = thrown
+    })
   } finally {
-    await fs.chmod(path.join(profileDir('atomic'), 'b.yml'), 0o666)
+    clearInterval(poller)
   }
 
-  const leftovers = (await fs.readdir(profileDir('atomic'))).filter((name) =>
-    name.startsWith('.dsh-gist-settings-staging-'),
+  assert.ok(error, 'the commit must have failed')
+  assert.match(error.message, /changed after this download wrote them/)
+  assert.match(error.message, /a\.yml/)
+  assert.equal(
+    await read('rollback', 'a.yml'),
+    'a.yml: EDITOR\n',
+    'a revision written by someone else after this download is not ours to undo',
   )
+  if (!edited) return 'the external edit did not land on this run, so nothing was exercised'
+  assert.equal(await read('rollback', 'f000.yml'), 'f000.yml: old\n', 'our own write must be rolled back')
+
+  const leftovers = (await fs.readdir(dir)).filter((name) => name.startsWith('.dsh-gist-settings-staging-'))
   assert.deepEqual(leftovers, [], 'the staging directory must be cleaned up even when the commit fails')
 })
 
@@ -475,6 +502,48 @@ await check('two waiters racing one stale lock cannot both enter the critical se
     )
   }
   await fs.rm(lockPath, { force: true })
+})
+
+await check('a state write is refused when the lock has been taken over', async () => {
+  await fs.mkdir(stateDir, { recursive: true })
+  let ran = false
+  await assert.rejects(
+    () =>
+      core.withStateLock(async () => {
+        // Another process reclaimed the lock and took it for itself, which is the
+        // last thing an ownership-safe takeover should allow but which no lock file
+        // can rule out on its own.
+        await fs.writeFile(lockPath, '999999 another-machine\n', 'utf8')
+        ran = true
+        await core.saveState({ version: 1, profiles: {} }, config)
+      }, config),
+    /no longer held by this process/,
+    'the write the lock protects has to verify the lock it is under',
+  )
+  assert.equal(ran, true, 'the critical section must have run')
+  await fs.rm(lockPath, { force: true })
+})
+
+await check('a fresh reclaim token blocks every other reclaimer', async () => {
+  const pid = await deadPid()
+  await fs.mkdir(stateDir, { recursive: true })
+  // An abandoned lock... and a reclaim already in progress on it. The token is what
+  // makes takeover ownership-safe, so while it is held nobody else may remove the
+  // lock, however stale it looks. This is the deterministic half of the race the
+  // waiter test above can only provoke.
+  await fs.writeFile(lockPath, `${pid} ${os.hostname()}\n`, 'utf8')
+  await fs.writeFile(`${lockPath}.reclaim`, `${process.pid} ${os.hostname()}\n`, 'utf8')
+
+  const pending = core.withStateLock(async () => 'took it', config)
+  const outcome = await Promise.race([
+    pending,
+    new Promise((resolve) => setTimeout(() => resolve('waited'), 1200)),
+  ])
+  assert.equal(outcome, 'waited', 'a reclaim must be the work of one process at a time')
+
+  await fs.rm(`${lockPath}.reclaim`, { force: true })
+  await fs.rm(lockPath, { force: true })
+  assert.equal(await pending, 'took it', 'and the waiter proceeds once the reclaimer is done')
 })
 
 await check('the lock is released when the work throws, and a nested call is refused', async () => {

@@ -110,6 +110,17 @@ await check('gist_upload creates a gist for every profile', async () => {
   assert.match(body, /beta: created https:\/\/gist\.github\.com/)
 })
 
+await check('an explicit-profile upload does not report other profiles as missing', async () => {
+  const body = await call('gist_upload', { profile: 'alpha' })
+  assert.match(body, /alpha: (created|updated)/)
+  assert.doesNotMatch(
+    body,
+    /NOT uploaded/,
+    'the profiles that were not selected are not profiles that are missing',
+  )
+  assert.doesNotMatch(body, /beta/)
+})
+
 await check('gist_status now reports both profiles in sync', async () => {
   const body = await call('gist_status')
   assert.equal(body.match(/in sync/g)?.length, 2, body)

@@ -18,6 +18,31 @@ in `test/live.test.mjs`. Every one of them fails if its fix is reverted.
 
 ### Fixed
 
+- **Stale-lock takeover could still act on a lock it had not inspected.** Replacing the `rm` with a
+  rename was not enough: both act on the path, so a waiter whose decision was delayed by a loaded
+  machine could move or delete a lock another waiter had already taken. Removal now happens under a
+  reclaim token only one process can create, and the lock is re-read *and re-checked for staleness*
+  under that token — while it is held nothing else can remove the lock (that needs the token) and
+  nothing else can create one (the path is occupied). The token's own critical section is three
+  filesystem calls with no I/O, so an abandoned token is taken over after a few seconds, and even then a
+  reclaimer removes the lock only if the re-read still says stale. On top of that, `saveState` now proves
+  it still holds the lock immediately before every write, which closes every way the lock could have been
+  displaced — from the side that would corrupt the file.
+- **A rollback could destroy an edit made after the download wrote the file.** For a file the download
+  created, the rollback deleted whatever was at that path; for one it replaced, it renamed the
+  pre-download bytes over it. Neither checked that the target still held *this transaction's* revision,
+  so an editor's change — which is in no backup the plugin took — was destroyed. Content is now compared
+  before anything is undone: a target that has changed is left exactly as it is and named in the error
+  alongside the backup directory. (Content rather than file identity, because an editor usually writes in
+  place: the inode is unchanged while the bytes are not.)
+- **An upload of one named profile reported every other profile as missing.** The list of profiles to
+  name as "no directory on this machine" was computed from every known profile rather than from the
+  selection, so `gist_upload(profile: "alpha")` claimed `beta` had no directory when `beta` simply was
+  not selected. That list is now empty for a single-profile upload, and a tool-layer case pins it.
+- **Windows device names were accepted as tracked names.** `NUL`, `nul.txt`, `COM1.yml` and friends passed
+  validation. Node reaches them through verbatim paths and treats them as ordinary files — that is not
+  the failure, and I could not reproduce one — but the name means a device to every other program that
+  touches the profile directory, and a tracked name has to mean one thing everywhere. They are refused.
 - **Nested tracked names were advertised and cannot work.** A gist is a flat collection of files, and
   GitHub answers a filename containing a slash with `HTTP 422 Validation Failed` — verified against the
   real API, and now pinned by `test/live.test.mjs`. So `profileFiles: ['config/app.yml']` did not merely

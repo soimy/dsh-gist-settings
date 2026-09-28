@@ -412,9 +412,14 @@ function buildTools(ctx, userConfig) {
       // state file still tracks but whose directory is gone has nothing to send.
       // It is named in the result rather than dropped, because silently omitting a
       // tracked profile is how a reader concludes their backups are complete.
-      const known = await core.listKnownProfiles(config)
+      //
+      // Only for a bulk upload, though: when one profile was named, every other
+      // profile is simply not selected, and reporting those as "no directory on this
+      // machine" would be false.
       const names = profile ? [await resolveProfileArg(profile, config)] : await core.listProfiles(config)
-      const skipped = known.filter((name) => !names.includes(name))
+      const skipped = profile
+        ? []
+        : (await core.listKnownProfiles(config)).filter((name) => !names.includes(name))
       if (names.length === 0 && skipped.length === 0) return text('No profiles found; nothing to upload.')
 
       const lines = []

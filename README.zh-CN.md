@@ -14,7 +14,7 @@
 | 同步引擎（`lib/core.js`） | 已完成 |
 | Host 插件 + 4 个 agent 工具 | **已安装并生效**，可在会话中调用 |
 | 真实 GitHub 往返 | **已在真实账号上验证** |
-| 测试 | **五套共 154 项离线用例，另有 12 项真实用例**，全部通过 |
+| 测试 | **五套共 157 项离线用例，另有 12 项真实用例**，全部通过 |
 | Client 设置页 | 尚未开始 —— 见[设置页](#设置页) |
 | 许可证 | MIT |
 
@@ -225,7 +225,7 @@ cordis.patch.yml       bundle 补丁（插入插件行；并记录配置说明�
 client.js              Client 设置页（尚未编写）
 locale/{en,zh}.json    Plugin Manager 卡片用的展示元数据
 icon.svg               bundle 图标
-test/                  五套共 154 项离线用例，另有 12 项真实用例
+test/                  五套共 157 项离线用例，另有 12 项真实用例
 scripts/               check-changelog.mjs —— 校验 CHANGELOG.md
 .github/               Issue 表单与 PR 模板
 ```
@@ -242,7 +242,7 @@ scripts/               check-changelog.mjs —— 校验 CHANGELOG.md
 ## 开发
 
 ```bash
-npm test                # 五套离线用例（154 项）
+npm test                # 五套离线用例（157 项）
 npm run test:sync       # 用假 gh 跑引擎完整生命周期
 npm run test:tools      # 工具层、参数校验、故障隔离
 npm run test:schema     # 定义 vs. Harness 自带校验器
