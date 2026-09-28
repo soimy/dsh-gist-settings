@@ -12,9 +12,15 @@
  *   FAKE_GH_STORE          path to the JSON store (required)
  *   FAKE_GH_TRUNCATE       comma-separated file names served `truncated: true`
  *                          with a `raw_url`, as real GitHub does for large files
+ *   FAKE_GH_RAW_BASE       origin used to build those `raw_url` values, so a test
+ *                          can present one the plugin must refuse to follow
+ *   FAKE_GH_FAIL_RAW       "1" to make a raw content request fail, which is what a
+ *                          proxy-only machine looks like to the direct fetch
  *   FAKE_GH_FAIL_GET       comma-separated gist ids whose GET fails with HTTP 500
  *   FAKE_GH_FAIL_GET_ALL   "1" to fail every gist GET
  *   FAKE_GH_UNAUTHENTICATED "1" to make `auth status` report a logged-out CLI
+ *   FAKE_GH_LOGGED_OUT_OK "1" to report a logged-out CLI while still exiting 0,
+ *                          which is what a real gh does when no host is configured
  *   FAKE_GH_FAIL_CREATE    "1" to fail every POST /gists
  */
 
@@ -64,7 +70,8 @@ function fail(message, code = 1) {
 }
 
 function rawUrlFor(gist, name) {
-  return `https://gist.githubusercontent.com/testuser/${gist.id}/raw/${name}`
+  const base = process.env.FAKE_GH_RAW_BASE ?? 'https://gist.githubusercontent.com/testuser'
+  return `${base}/${gist.id}/raw/${name}`
 }
 
 /**
@@ -99,14 +106,22 @@ function project(gist) {
   }
 }
 
-/** Resolve a `gist.githubusercontent.com/<user>/<id>/raw/<name>` URL back to its content. */
+/**
+ * Resolve a `gist.githubusercontent.com/<user>/<id>/raw/<name>` URL back to its content.
+ *
+ * Nothing in the plugin routes a raw URL through `gh` any more — a truncated file
+ * is fetched directly — so this branch now documents what `gh api <url>` would
+ * have answered, and keeps the double faithful to the real CLI.
+ */
 function serveRaw(url) {
+  if (process.env.FAKE_GH_FAIL_RAW === '1') fail(`fake gh: HTTP 502: Bad Gateway (${url})`)
   const parsed = new URL(url)
   const parts = parsed.pathname.split('/').filter(Boolean)
   const rawIndex = parts.indexOf('raw')
   if (rawIndex < 1 || rawIndex + 1 >= parts.length) fail(`fake gh: unrecognised raw URL ${url}`)
   const id = parts[rawIndex - 1]
-  const name = parts[rawIndex + 1]
+  // Everything after `/raw/` is the file name, which may itself contain slashes.
+  const name = parts.slice(rawIndex + 1).join('/')
   const gist = load().gists[id]
   if (!gist || !(name in gist.files)) fail(`fake gh: HTTP 404: Not Found (${url})`)
   out(gist.files[name])
@@ -123,6 +138,12 @@ if (argv[0] === '--version') {
 if (argv[0] === 'auth' && argv[1] === 'status') {
   if (process.env.FAKE_GH_UNAUTHENTICATED === '1') {
     fail('You are not logged into any GitHub hosts. To log in, run: gh auth login')
+  }
+  if (process.env.FAKE_GH_LOGGED_OUT_OK === '1') {
+    // A real `gh auth status` with no host configured says this and still exits 0,
+    // so a caller that only checks the exit code reads a logged-out CLI as ready.
+    out('You are not logged into any GitHub hosts. To log in, run: gh auth login')
+    process.exit(0)
   }
   out('github.com\n  ✓ Logged in to github.com account testuser (keyring)\n  - Active account: true')
   process.exit(0)

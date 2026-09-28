@@ -75,12 +75,18 @@ function readConfig(raw) {
     ghPath = Array.isArray(input.ghPath) ? stringList('ghPath') : str('ghPath')
   }
 
+  const profileFiles = stringList('profileFiles')
+  // Validated here as well as at use time, so a name that could never be handled —
+  // an absolute path, a `..` segment, a colon — fails when the plugin loads rather
+  // than on the first tool call, where it would look like a one-off error.
+  if (profileFiles) core.resolveProfileFiles({ profileFiles })
+
   return {
     ghPath,
     dshHome: str('dshHome'),
     profilesDir: str('profilesDir'),
     stateDir: str('stateDir'),
-    profileFiles: stringList('profileFiles'),
+    profileFiles,
   }
 }
 
@@ -182,6 +188,17 @@ const STATUS_LABEL = {
   'unknown': 'unknown - gh is unavailable, remote state not checked',
 }
 
+/**
+ * The auth line, which must not tell you to log in to a CLI that is not installed.
+ * When gh could not be found there is no auth state to report, and advising
+ * `gh auth login` sends the reader down the wrong path entirely.
+ */
+function describeAuth(health) {
+  if (!health.gh.found) return 'not checked - gh is not installed'
+  if (!health.auth?.authenticated) return 'NOT AUTHENTICATED - run `gh auth login`'
+  return `ok (${health.auth.account})`
+}
+
 function formatStatusReport(health, rows, statePath) {
   const lines = []
   if (health.gh.found) {
@@ -190,9 +207,7 @@ function formatStatusReport(health, rows, statePath) {
   } else {
     lines.push(`gh:   NOT FOUND - ${health.gh.reason}`)
   }
-  lines.push(
-    `auth: ${health.auth?.authenticated ? `ok (${health.auth.account})` : 'NOT AUTHENTICATED - run `gh auth login`'}`,
-  )
+  lines.push(`auth: ${describeAuth(health)}`)
   lines.push(`home: ${health.dshHome}`)
   lines.push(`state: ${statePath}`)
   lines.push('')
@@ -323,7 +338,7 @@ function buildTools(ctx, userConfig) {
       const signal = exec?.signal
       const h = await core.health(config)
       const state = await core.loadState(config)
-      const names = profile ? [await resolveProfileArg(profile, config)] : await core.listProfiles(config)
+      const names = profile ? [await resolveProfileArg(profile, config)] : await core.listKnownProfiles(config)
       const online = h.gh.found && h.auth?.authenticated === true
       const rows = []
       for (const name of names) {
@@ -366,7 +381,10 @@ function buildTools(ctx, userConfig) {
       properties: {
         profile: {
           type: 'string',
-          description: 'Profile to upload. Omit to upload every profile.',
+          description:
+            'Profile to upload. Omit to upload every profile that still has a directory on this ' +
+            'machine; a tracked profile whose directory is gone is named in the result rather than ' +
+            'silently skipped, because gist_download is what restores it.',
         },
         description: {
           type: 'string',
@@ -390,8 +408,19 @@ function buildTools(ctx, userConfig) {
       const signal = exec?.signal
       const ghPath = verifyGh === false ? (await core.resolveGh(config)).path : await requireGh(config)
       if (!ghPath) throw new Error('gh CLI not found; set `ghPath` in this plugin\'s config.')
+      // Local, not known: an upload pushes what is on disk, and a profile the
+      // state file still tracks but whose directory is gone has nothing to send.
+      // It is named in the result rather than dropped, because silently omitting a
+      // tracked profile is how a reader concludes their backups are complete.
+      //
+      // Only for a bulk upload, though: when one profile was named, every other
+      // profile is simply not selected, and reporting those as "no directory on this
+      // machine" would be false.
       const names = profile ? [await resolveProfileArg(profile, config)] : await core.listProfiles(config)
-      if (names.length === 0) return text('No profiles found; nothing to upload.')
+      const skipped = profile
+        ? []
+        : (await core.listKnownProfiles(config)).filter((name) => !names.includes(name))
+      if (names.length === 0 && skipped.length === 0) return text('No profiles found; nothing to upload.')
 
       const lines = []
       for (const name of names) {
@@ -405,11 +434,22 @@ function buildTools(ctx, userConfig) {
           if (result.pruned.length) {
             parts.push(`  removed from the gist (no longer tracked): ${result.pruned.join(', ')}`)
           }
+          if (result.dropped.length) {
+            parts.push(
+              `  DELETED from the gist because force was set, though they are still tracked: ${result.dropped.join(', ')}`,
+            )
+          }
           if (result.missing.length) parts.push(`  absent locally: ${result.missing.join(', ')}`)
           lines.push(parts.join('\n'))
         } catch (error) {
           lines.push(`${name}: FAILED - ${error.message}`)
         }
+      }
+      if (skipped.length > 0) {
+        lines.push(
+          `${skipped.join(', ')}: NOT uploaded - no profile directory on this machine. ` +
+            'Run gist_download to restore it from its gist.',
+        )
       }
       return text(lines.join('\n\n'))
     },
@@ -421,7 +461,9 @@ function buildTools(ctx, userConfig) {
       'Download GitHub Gist configuration over the local DeepSeek Harness profile files (the "sync in" ' +
       'direction). Local files are backed up under the state directory first. Restoring files that are ' +
       'simply missing locally needs no force; overwriting local changes that were never uploaded does, ' +
-      'and is refused otherwise. Tracked files the gist does not carry are kept, never deleted.',
+      'and is refused otherwise. Tracked files the gist does not carry are kept, never deleted. The write ' +
+      'is all-or-nothing: content is staged first and then renamed into place, so a failure part way ' +
+      'through leaves every file exactly as it was.',
     parameters: {
       type: 'object',
       properties: {
@@ -443,7 +485,10 @@ function buildTools(ctx, userConfig) {
       const signal = exec?.signal
       const ghPath = await requireGh(config)
       const state = await core.loadState(config)
-      const names = profile ? [await resolveProfileArg(profile, config)] : await core.listProfiles(config)
+      // Known, not local: a profile whose directory was deleted outright is still
+      // tracked, and its gist is the only copy left. Listing directories alone
+      // would hide exactly the profile that needs restoring.
+      const names = profile ? [await resolveProfileArg(profile, config)] : await core.listKnownProfiles(config)
       const tracked = names.filter((n) => state.profiles?.[n]?.gistId)
       if (tracked.length === 0) {
         return text('Nothing to download: no profile has a gist yet. Run gist_upload first.')
@@ -475,7 +520,9 @@ function buildTools(ctx, userConfig) {
       'files that went missing locally, creates a gist for an untracked or genuinely deleted one, and ' +
       'does nothing when both sides already match. When both sides changed it refuses to guess and ' +
       'reports a divergence unless force is true. A gist that merely cannot be reached is never treated ' +
-      'as deleted.',
+      'as deleted. A deletion is never propagated in either direction: a tracked file removed from the ' +
+      'gist is put back into it in the same call, and a tracked file deleted locally is not removed ' +
+      'from the gist. To apply a deletion, delete the side that still holds the copy first.',
     parameters: {
       type: 'object',
       properties: {
@@ -485,7 +532,10 @@ function buildTools(ctx, userConfig) {
         },
         force: {
           type: 'boolean',
-          description: 'Resolve a divergence by uploading the local files. Defaults to false.',
+          description:
+            'Resolve without stopping to ask. A divergence is resolved by uploading the local files; a ' +
+            'restore that would discard unsynced local edits is allowed through instead of being refused ' +
+            '(a backup is taken first). Defaults to false.',
         },
       },
       additionalProperties: false,
@@ -494,7 +544,7 @@ function buildTools(ctx, userConfig) {
       const config = withConfig()
       const signal = exec?.signal
       const ghPath = await requireGh(config)
-      const names = profile ? [await resolveProfileArg(profile, config)] : await core.listProfiles(config)
+      const names = profile ? [await resolveProfileArg(profile, config)] : await core.listKnownProfiles(config)
       if (names.length === 0) return text('No profiles found; nothing to sync.')
 
       const lines = []
@@ -511,8 +561,24 @@ function buildTools(ctx, userConfig) {
           if (result.pruned?.length) {
             detail += `\n  removed from the gist (no longer tracked): ${result.pruned.join(', ')}`
           }
-          if (result.keptLocally?.length) {
+          if (result.dropped?.length) {
+            detail +=
+              `\n  DELETED from the gist because force was set, though they are still tracked: ` +
+              result.dropped.join(', ')
+          }
+          // `keptLocally` means "still here and still absent from the gist", which
+          // stops being true when the same call republished them.
+          if (result.keptLocally?.length && !result.republished?.length) {
             detail += `\n  kept locally (the gist does not carry them): ${result.keptLocally.join(', ')}`
+          }
+          if (result.republished?.length) {
+            detail += `\n  the gist had dropped these; put back from the local copy: ${result.republished.join(', ')}`
+          }
+          if (result.written?.length) {
+            detail += `\n  restored: ${result.written.join(', ')}`
+          }
+          if (result.backupDir) {
+            detail += `\n  previous files backed up to: ${result.backupDir}`
           }
           lines.push(`${name}: ${detail}`)
         } catch (error) {

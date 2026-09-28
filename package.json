@@ -24,13 +24,17 @@
     "CONTRIBUTING.md"
   ],
   "scripts": {
-    "test": "node test/sync.test.mjs && node test/tools.test.mjs && node test/schema.test.mjs && node test/regression.test.mjs && node scripts/check-changelog.mjs",
+    "test": "node test/sync.test.mjs && node test/tools.test.mjs && node test/schema.test.mjs && node test/regression.test.mjs && node test/safety.test.mjs && node scripts/check-changelog.mjs",
     "test:sync": "node test/sync.test.mjs",
     "test:tools": "node test/tools.test.mjs",
     "test:schema": "node test/schema.test.mjs",
     "test:regression": "node test/regression.test.mjs",
+    "test:safety": "node test/safety.test.mjs",
     "test:live": "node test/live.test.mjs",
     "changelog:check": "node scripts/check-changelog.mjs"
+  },
+  "engines": {
+    "node": ">=20.0.0"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh": "0.1.7-rc.2"

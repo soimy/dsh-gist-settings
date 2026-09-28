@@ -18,7 +18,7 @@
   weak; name the case that would have failed before this change.
 -->
 
-- [ ] `npm test` — the four offline suites
+- [ ] `npm test` — the five offline suites
 - [ ] `npm run test:live` — only if this touches the GitHub round trip (creates and deletes a real gist)
 - [ ] Manual check: <!-- what you did in a real session, if anything -->
 

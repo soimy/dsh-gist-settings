@@ -14,7 +14,9 @@
  *
  * What it proves that the fake-gh suites cannot: `gh api` really accepts our
  * POST/PATCH/DELETE bodies, that a PATCH with a null file value deletes the
- * file, and that content survives a real round trip byte for byte.
+ * file, that content survives a real round trip byte for byte, and that a file
+ * big enough for the API to truncate really does come back whole from the
+ * `raw_url` it names.
  */
 
 import assert from 'node:assert/strict'
@@ -50,6 +52,7 @@ console.log(`  fixture: ${root}\n`)
 
 const results = []
 let gistId = null
+let bigGistId = null
 
 /**
  * Read the gist until `predicate` holds.
@@ -157,13 +160,64 @@ try {
     assert.equal(result.action, 'noop')
     assert.equal(result.gistUrl, gist.url)
   })
+
+  await check('a file above the truncation threshold round-trips through raw_url', async () => {
+    // The API truncates a file's `content` once it passes 1 MB and offers the rest
+    // at `raw_url`. Only real GitHub can prove that fetching that URL — rather
+    // than asking `gh api` for it — returns the whole file, so this case lives
+    // here and not in the fake-gh suites.
+    const body = `# big\n${'x'.repeat(1500 * 1024)}\n`
+    const bigDir = path.join(root, 'profiles', 'big')
+    await fs.mkdir(bigDir, { recursive: true })
+    await fs.writeFile(path.join(bigDir, 'big.yml'), body, 'utf8')
+    const bigConfig = { ...config, profileFiles: ['big.yml'] }
+
+    const created = await core.uploadProfile('big', { ghPath, config: bigConfig })
+    bigGistId = created.gistId
+    assert.deepEqual(created.uploadedFiles, ['big.yml'])
+
+    const gist = await core.gistGet(ghPath, bigGistId)
+    assert.equal(
+      gist.truncated.includes('big.yml'),
+      true,
+      'expected GitHub to truncate a 1.5 MB file; if this fails the API threshold has moved',
+    )
+    assert.equal(gist.files['big.yml'].length, body.length, 'the raw_url fetch must return the whole file')
+    assert.equal(gist.files['big.yml'], body, 'and return it byte for byte')
+
+    await fs.writeFile(path.join(bigDir, 'big.yml'), 'clobbered\n', 'utf8')
+    await core.downloadProfile('big', { ghPath, config: bigConfig, force: true })
+    assert.equal(await fs.readFile(path.join(bigDir, 'big.yml'), 'utf8'), body)
+  })
+  await check('the API refuses a filename containing a slash, which is why tracked names have none', async () => {
+    // This pins the *reason* `normalizeTrackedName` rejects a separator rather than
+    // the rejection itself: a gist is a flat collection of files, and this is the
+    // answer the API gives. If GitHub ever allows it, this case fails and the
+    // decision can be revisited instead of quietly staying wrong.
+    assert.throws(
+      () => core.resolveProfileFiles({ profileFiles: ['config/probe.yml'] }),
+      /a gist cannot hold a directory/,
+    )
+
+    const result = await core.ghRun(
+      ghPath,
+      ['api', '--method', 'POST', '/gists', '-H', 'Content-Type: application/json', '--input', '-'],
+      { input: JSON.stringify({ public: false, files: { 'config/probe.yml': { content: 'probe\n' } } }) },
+    )
+    if (result.code === 0) {
+      // Do not leave a surprise gist behind if the API has changed its mind.
+      await core.gistDelete(ghPath, JSON.parse(result.stdout).id)
+      assert.fail('the API accepted a nested filename; nested tracked names could be reconsidered')
+    }
+    assert.match(`${result.stdout}${result.stderr}`, /422|Validation Failed/)
+  })
 } finally {
-  if (gistId) {
+  for (const id of [gistId, bigGistId].filter(Boolean)) {
     try {
-      await core.gistDelete(ghPath, gistId)
-      console.log(`\n  cleaned up gist ${gistId}`)
+      await core.gistDelete(ghPath, id)
+      console.log(`\n  cleaned up gist ${id}`)
     } catch (error) {
-      console.log(`\n  WARNING: could not delete gist ${gistId}: ${error.message}`)
+      console.log(`\n  WARNING: could not delete gist ${id}: ${error.message}`)
     }
   }
   await fs.rm(root, { recursive: true, force: true })

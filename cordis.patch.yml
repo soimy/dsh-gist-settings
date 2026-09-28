@@ -9,7 +9,7 @@
 #       name: '@local/dsh-gist-settings'
 #       config:
 #         ghPath: 'C:\Program Files\GitHub CLI\gh.exe'   # default: probe PATH, then well-known dirs
-#         profileFiles: ['cordis.patch.yml', 'package.json']
+#         profileFiles: ['cordis.patch.yml', 'package.json']   # single file names; no separators, no '..'
 #         # dshHome: 'C:\Users\me\.dsh'
 #         # profilesDir: 'C:\Users\me\.dsh\profiles'
 #         # stateDir: 'C:\Users\me\.dsh\gist-settings'
