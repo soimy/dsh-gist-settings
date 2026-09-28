@@ -72,8 +72,9 @@ Knowing which suite covers what saves a lot of guessing.
 | `npm run test:sync` | 19 | The engine's whole lifecycle against an in-memory `gh`: create, upload, divergence, download, backup, pruning, recreation, idempotency. |
 | `npm run test:tools` | 23 | The tool layer: registration, argument validation, config validation at load, profile-name resolution, and that one failing profile never aborts the others. |
 | `npm run test:schema` | 49 | The hand-written definitions against the Harness's *own* validators — the registration contract, the supported JSON Schema subset, argument validation, and that each returned value satisfies its declared output schema. |
-| `npm run test:regression` | 30 | The specific defects an adversarial review found. Every case here fails if its fix is reverted. |
+| `npm run test:regression` | 32 | The specific defects an adversarial review found. Every case here fails if its fix is reverted. |
 | `npm run test:safety` | 38 | The guarantees the README makes: containment for the profile and every tracked file, an all-or-nothing download, `force` doing what it says, recovery of a profile whose directory is gone, one-sync convergence after a remote deletion, cross-process state locking, and a rollback that never overwrites a revision it cannot prove it wrote. |
+| `npm run test:docs` | 13 | The documentation checker: the destination shapes Markdown allows (angle brackets, balanced parentheses, backslash escapes) and the containment rule — a link out of the repository, written directly or reached through a link inside it, is refused. Each of those was a real defect at some point, which is why the checker has its own suite. |
 | `npm run test:release` | 6 | The release-notes script: the success path, and every way it is meant to refuse a tag — a version that disagrees with `package.json`, no dated section, an empty section, a malformed tag. It is the one script here that normally first runs on a tag push, so the refusals matter as much as the success. |
 | `npm run test:live` | 12 | The real GitHub round trip, including a file above the API's truncation threshold. Opt-in, and it deletes every gist it creates. |
 
@@ -277,8 +278,9 @@ plugin_manager  action: install_bundle  target: <此仓库的绝对路径>
 | `npm run test:sync` | 19 | 引擎完整生命周期（内存版 gh）：创建、上传、分叉、下载、备份、清理、重建、幂等。 |
 | `npm run test:tools` | 23 | 工具层：注册、参数校验、加载时的配置校验、profile 名解析、单个 profile 失败不会中断其他。 |
 | `npm run test:schema` | 49 | 手写定义 vs Harness **自带**校验器：注册契约、受支持的 JSON Schema 子集、参数校验、返回值满足声明的输出 schema。 |
-| `npm run test:regression` | 30 | 对抗性审核发现的具体缺陷。**每一条在修复被回退时都会失败。** |
+| `npm run test:regression` | 32 | 对抗性审核发现的具体缺陷。**每一条在修复被回退时都会失败。** |
 | `npm run test:safety` | 38 | README 承诺的那些保证：profile 与每个受追踪文件的目录包容、全有或全无的下载、`force` 说到做到、目录被整个删掉后的恢复、远端删除后一次同步即收敛、跨进程状态锁，以及绝不覆盖「无法证明是自己写的那一版」的回滚。 |
+| `npm run test:docs` | 13 | 文档链接检查器：Markdown 允许的各种目标写法（尖括号、配对括号、反斜杠转义），以及仓库包容规则 —— 指向仓库之外的链接，无论是直写还是经由仓库内部的链接抵达，都会被拒绝。这些每一项都曾是真实缺陷，所以这个检查器有自己的套件。 |
 | `npm run test:release` | 6 | 发布说明脚本：成功路径，以及它**应当拒绝**的每一种 tag —— 版本与 `package.json` 不一致、没有带日期的小节、小节为空、tag 格式不合法。这是本仓库唯一一个通常要到打 tag 才第一次运行的脚本，所以"拒绝"与"成功"同样重要。 |
 | `npm run test:live` | 12 | 真实 GitHub 往返，包含一个超过 API 截断阈值的文件。需显式开启，且会删除自己创建的每一个 gist。 |
 

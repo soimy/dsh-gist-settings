@@ -19,6 +19,8 @@ import { promisify } from 'node:util'
 
 import * as core from '../lib/core.js'
 
+import { flushThenExit } from './stdout-flush.mjs'
+
 const run = promisify(execFile)
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -108,6 +110,45 @@ await check('a gh that exits 0 while logged out is still unauthenticated', async
   const auth = await core.checkAuth(ghPath)
   assert.equal(auth.authenticated, false, 'the message has to be read, not just the exit code')
   assert.match(auth.output, /not logged into any GitHub hosts/)
+})
+
+await check('a delivered response exits with the code it was given', async () => {
+  const codes = []
+  const errors = []
+  await flushThenExit({
+    code: 7,
+    timeoutMs: 50,
+    write: { write: (text, callback) => callback() },
+    stderr: { write: (text) => errors.push(text) },
+    exit: (code) => codes.push(code),
+  })
+  assert.deepEqual(codes, [7])
+  assert.deepEqual(errors, [], 'a delivered response has nothing to complain about')
+})
+
+await check('a response whose flush misses its budget fails loudly, never as a success', async () => {
+  // The double waits for the body to reach the pipe before exiting, because
+  // `process.exit()` does not wait and a gist with a few hundred files is past the
+  // pipe buffer. That wait needs a limit, and the limit must not be a *successful*
+  // exit: doing so would hand the caller half a JSON document as if it were the
+  // answer, which is the failure the wait exists to prevent.
+  //
+  // Driven through the module with a write that never calls back, because staging a
+  // flush that genuinely never completes is not portable: on POSIX the writer queues
+  // the rest of the body and carries on, while on Windows a full pipe blocks the
+  // writing thread, so the process never reaches its own timeout and a test can only
+  // hang.
+  const codes = []
+  const errors = []
+  await flushThenExit({
+    code: 0,
+    timeoutMs: 0,
+    write: { write: () => {} },
+    stderr: { write: (text) => errors.push(text) },
+    exit: (code) => codes.push(code),
+  })
+  assert.deepEqual(codes, [1], 'a body that was not delivered must not exit as a success')
+  assert.match(errors.join(''), /did not drain/, 'and it has to say what happened')
 })
 
 await check('an unreachable gist is not reported as deleted', async () => {

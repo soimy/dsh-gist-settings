@@ -40,9 +40,29 @@ in `test/live.test.mjs`. Every one of them fails if its fix is reverted.
 - **`npm run test:release`**, six cases for the release-notes script: the success path, and every way it
   is meant to refuse a tag. It is the one script here that normally first runs on a tag push, which is
   the worst moment to discover it accepts the wrong thing, so its refusals are checked on every push.
+- **`npm run test:docs`**, thirteen cases for the documentation checker: the destination shapes Markdown
+  allows (angle brackets, balanced parentheses, backslash escapes), the containment rule, and the
+  behaviours that already worked. Three of its cases pin defects that shipped — a truncated
+  angle-bracket path that let a broken link through, a balanced-parenthesis path that failed a good one,
+  and a link through an in-repo symlink that reached outside the repository.
 
 ### Fixed
 
+- **The release job left its write credential where the install could read it.** `actions/checkout`
+  persists the token into the local git config by default, and this job holds `contents: write` and then
+  installs an external dependency tree — with no lockfile to pin what that tree contains. An install
+  script inside it could have read a credential able to push to this repository. Every checkout now sets
+  `persist-credentials: false`; nothing needs it, because the publish step passes `GH_TOKEN` explicitly.
+- **The documentation check could not read a destination with Markdown escapes.** `[x](a\(1\).md)` means
+  the file `a(1).md`, but the scanner left the backslashes in the path it looked for, so an existing file
+  was reported as missing and `npm test` failed on a link that was fine. On Windows the stray backslash
+  also reads as a path separator, so the check was looking somewhere else entirely.
+- **The test double's flush limit could still return a truncated body as a success.** The wait added
+  earlier had a timeout that exited 0, so a body that had not reached the pipe would be handed back as a
+  successful response — the same truncation, only slower. Giving up now fails loudly and says so. The
+  wait lives in `test/stdout-flush.mjs` so that branch is driven directly by a test: staging a flush that
+  genuinely never completes is not portable, because on POSIX the writer queues the rest and carries on
+  while on Windows a full pipe blocks the writing thread, and the test can only hang.
 - **The release job could not have published anything.** It ran `npm test`, which includes
   `test/schema.test.mjs` — and that suite fails, by design, when it cannot find an installed Harness.
   The matrix gets away with it by opting into the skip and letting a separate job run the contract; the

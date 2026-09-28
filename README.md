@@ -18,7 +18,7 @@ guarded two-way sync are exposed as agent tools, so you can drive them from a co
 | Sync engine (`lib/core.js`) | Done |
 | Host plugin + agent tools | **Installed and live**; callable from a session |
 | Real GitHub round-trip | **Verified** against a real account |
-| Test suite | **165 offline cases across six suites, plus 12 live cases**, all passing |
+| Test suite | **180 offline cases across seven suites, plus 12 live cases**, all passing |
 | CI | Offline suites and repository checks on Linux, Windows and macOS, Node 20.3, 20.x, 22.x and 24.x |
 | Client settings page | Not started — see [The settings page](#the-settings-page) |
 | Licence | MIT |
@@ -263,7 +263,7 @@ cordis.patch.yml       Bundle patch (inserts the plugin row; documents config)
 client.js              Client settings page (not yet written)
 locale/{en,zh}.json    Plugin display metadata for Plugin Manager cards
 icon.svg               Bundle icon
-test/                  165 offline cases across six suites, plus 12 live ones
+test/                  180 offline cases across seven suites, plus 12 live ones
 scripts/               check-changelog.mjs — validates CHANGELOG.md
 .github/               Issue forms and the pull-request template
 ```
@@ -280,7 +280,7 @@ scripts/               check-changelog.mjs — validates CHANGELOG.md
 ## Development
 
 ```bash
-npm test                # the six offline suites (165 cases) plus the changelog and docs checks
+npm test                # the seven offline suites (180 cases) plus the changelog and docs checks
 npm run test:sync       # engine lifecycle against a fake gh
 npm run test:tools      # tool layer, argument validation, failure isolation
 npm run test:schema     # definitions vs. the installed Harness validators

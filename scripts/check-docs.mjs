@@ -49,6 +49,29 @@ function walk(dir, found = []) {
   return found
 }
 
+/** ASCII punctuation, which is what a backslash may escape in Markdown. */
+const ESCAPABLE = /\\([!-/:-@[-`{-~])/g
+
+/**
+ * The path part of a destination, with its Markdown escapes resolved.
+ *
+ * `[x](a\(1\).md)` means the file `a(1).md`: the backslashes are escapes, not
+ * characters of the name. Leaving them in reported an existing file as missing, and
+ * on Windows a literal backslash also reads as a path separator, so the check was
+ * looking somewhere else entirely. The fragment separator is found before
+ * unescaping, so that an escaped `\#` stays part of the name.
+ */
+function destinationPath(raw) {
+  for (let index = 0; index < raw.length; index += 1) {
+    if (raw[index] === '\\') {
+      index += 1
+      continue
+    }
+    if (raw[index] === '#') return raw.slice(0, index).replace(ESCAPABLE, '$1')
+  }
+  return raw.replace(ESCAPABLE, '$1')
+}
+
 /**
  * Every link destination in one Markdown document.
  *
@@ -125,7 +148,7 @@ for (const file of files) {
   for (const raw of linksIn(fs.readFileSync(file, 'utf8'))) {
     // A scheme, a protocol-relative URL, or a fragment of this same document.
     if (raw.startsWith('#') || raw.startsWith('//') || /^[a-z][a-z0-9+.-]*:/i.test(raw)) continue
-    const target = raw.split('#')[0]
+    const target = destinationPath(raw)
     if (target === '') continue
 
     let decoded

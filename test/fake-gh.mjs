@@ -26,6 +26,8 @@
 
 import fs from 'node:fs'
 
+import { flushThenExit } from './stdout-flush.mjs'
+
 const STORE = process.env.FAKE_GH_STORE
 if (!STORE) {
   process.stderr.write('FAKE_GH_STORE is not set\n')
@@ -67,26 +69,16 @@ function out(value) {
 /**
  * Exit once the response body has actually reached the pipe.
  *
- * `process.exit()` does not wait for a write to a pipe, and this double answers
- * `GET /gists/<id>` and a raw URL with the whole payload — hundreds of kilobytes in
- * the suites that track a few hundred files, comfortably past the 64 KiB pipe
- * buffer, and 1.5 MB for the live truncation case. Exiting with the body still
- * queued delivered half of it, which core reported as `gh returned non-JSON output`
- * and which read like a defect in the plugin.
- *
- * Must be awaited, and used only where a body was just written: `process.exit()`
- * never returns, so replacing it with something that does would let the request
- * handling run on and answer a second time. The error paths keep the immediate exit,
- * because their messages are a few bytes and a write that small cannot be split.
+ * The waiting, the limit and the refusal to exit 0 on a body that was not delivered
+ * live in `stdout-flush.mjs`, which is a module so that branch can be tested
+ * directly. Must be awaited, and used only where a body was just written:
+ * `process.exit()` never returns, so replacing it with something that does would let
+ * the request handling run on and answer a second time. The error paths keep the
+ * immediate exit, because their messages are a few bytes and a write that small
+ * cannot be split.
  */
 async function drainThenExit(code = 0) {
-  await new Promise((resolve) => {
-    // Backstop: exit anyway rather than hang the caller if the write callback cannot
-    // arrive. Unref'd, so it never keeps the process alive on its own.
-    setTimeout(resolve, 5_000).unref()
-    process.stdout.write('', resolve)
-  })
-  process.exit(code)
+  await flushThenExit({ code })
 }
 
 function fail(message, code = 1) {
