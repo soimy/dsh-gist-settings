@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-gist-settings",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Back up and restore DeepSeek Harness profile configuration through GitHub Gists using the local gh CLI.",

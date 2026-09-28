@@ -10,6 +10,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-28
+
 Defects found by a re-review of the fixes below
 ([issue #1](https://github.com/soimy/dsh-gist-settings/issues/1)), and then by a second adversarial
 pass over those fixes themselves. Most are pinned by `test/safety.test.mjs`; the truncated-content
@@ -312,5 +314,6 @@ integration, mutation-testing and documentation audits). Each fix is pinned by a
   refused with the list of known ones, and the write paths refuse to record a second entry differing
   only in case, so a direct caller of the engine is protected too.
 
-[Unreleased]: https://github.com/soimy/dsh-gist-settings/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/soimy/dsh-gist-settings/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/soimy/dsh-gist-settings/releases/tag/v0.2.0
 [0.1.0]: https://github.com/soimy/dsh-gist-settings/releases/tag/v0.1.0
