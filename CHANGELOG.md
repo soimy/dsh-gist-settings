@@ -18,6 +18,20 @@ in `test/live.test.mjs`. Every one of them fails if its fix is reverted.
 
 ### Fixed
 
+- **A tracked file named `rollback` could abort the whole rollback.** The restore copies went into a fixed
+  `rollback` subdirectory of the staging directory, so a profile tracking a file by that name — one not
+  yet committed, whose staged copy still occupied the path — made creating that directory throw. Every
+  restore was skipped, the download was left half applied, and the thrown `EEXIST` *replaced* the error
+  that explains the download, so the backup location and the rollback outcome were lost too. Restores are
+  now written beside the staged files under a per-call random token: no naming decision a profile can
+  influence, and no setup step whose failure can pre-empt the report.
+- **A read failure during rollback was reported as somebody else's edit.** `readFile(...).catch(() =>
+  null)` collapsed every read error — `EISDIR`, `EPERM`, `EBUSY`, `EMFILE` — into "the content differs",
+  so the file was skipped and the message blamed an edit that may never have happened. A failed read is
+  not evidence of an edit: it means the transaction cannot prove the target is still its own revision,
+  and the answer is to leave the bytes alone and say so. Unreadable targets are now reported as
+  *unverified*, separately from *changed*, and — deliberately — are not restored. Restoring on a guess is
+  the one outcome that can destroy data no backup holds.
 - **Stale-lock takeover could still act on a lock it had not inspected.** Replacing the `rm` with a
   rename was not enough: both act on the path, so a waiter whose decision was delayed by a loaded
   machine could move or delete a lock another waiter had already taken. Removal now happens under a

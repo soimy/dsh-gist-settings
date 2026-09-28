@@ -16,7 +16,7 @@ guarded two-way sync are exposed as agent tools, so you can drive them from a co
 | Sync engine (`lib/core.js`) | Done |
 | Host plugin + agent tools | **Installed and live**; callable from a session |
 | Real GitHub round-trip | **Verified** against a real account |
-| Test suite | **157 offline cases across five suites, plus 12 live cases**, all passing |
+| Test suite | **159 offline cases across five suites, plus 12 live cases**, all passing |
 | Client settings page | Not started — see [The settings page](#the-settings-page) |
 | Licence | MIT |
 
@@ -192,10 +192,13 @@ once every byte has landed is it renamed into place: one atomic rename per file,
 old content or the new one and never a truncated mixture. If a rename still fails, the files already
 replaced are put back from the same bytes the backup holds, and the error says so and names the backup
 directory. A failed download therefore leaves the profile as it was, rather than at a revision that
-exists nowhere. Two honest qualifications: the rollback is best effort, so if it cannot restore a file
-it says which one and the backup is the recovery route; and if the *state write* after a successful
-commit fails, the files are in place and the error says that instead of claiming a lost download — the
-next `gist_status` repairs the stale baseline.
+exists nowhere — with one deliberate exception, because the rollback undoes only what this transaction
+truly wrote. A file that changed since, or one the rollback cannot read back to compare, is left exactly
+as it is and named in the error: an edit made after the download is in no backup, so overwriting it on a
+guess is the one outcome that could destroy data nothing can recover. Two further honest qualifications:
+the rollback is best effort, so if it cannot restore a file it says which one and the backup is the
+recovery route; and if the *state write* after a successful commit fails, the files are in place and the
+error says that instead of claiming a lost download — the next `gist_status` repairs the stale baseline.
 
 **Containment — the profile, and then every tracked file inside it.** Profile names are validated
 against the framework's own rules, and a resolved profile directory is re-checked against
@@ -254,7 +257,7 @@ cordis.patch.yml       Bundle patch (inserts the plugin row; documents config)
 client.js              Client settings page (not yet written)
 locale/{en,zh}.json    Plugin display metadata for Plugin Manager cards
 icon.svg               Bundle icon
-test/                  157 offline cases across five suites, plus 12 live ones
+test/                  159 offline cases across five suites, plus 12 live ones
 scripts/               check-changelog.mjs — validates CHANGELOG.md
 .github/               Issue forms and the pull-request template
 ```
@@ -271,7 +274,7 @@ scripts/               check-changelog.mjs — validates CHANGELOG.md
 ## Development
 
 ```bash
-npm test                # the five offline suites (157 cases) plus the changelog check
+npm test                # the five offline suites (159 cases) plus the changelog check
 npm run test:sync       # engine lifecycle against a fake gh
 npm run test:tools      # tool layer, argument validation, failure isolation
 npm run test:schema     # definitions vs. the installed Harness validators

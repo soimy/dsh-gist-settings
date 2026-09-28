@@ -327,6 +327,111 @@ await check('a failed commit restores what it wrote and leaves an external edit 
   assert.deepEqual(leftovers, [], 'the staging directory must be cleaned up even when the commit fails')
 })
 
+await check('a tracked file named rollback cannot break the rollback', async () => {
+  // The restore copies used to go into a fixed `rollback` subdirectory of the
+  // staging directory. A profile tracking a file by that name — ordered after the
+  // file that fails, so its staged copy still occupied the path — made creating
+  // that directory throw, which aborted every restore and replaced the error that
+  // explains the download with a bare EEXIST naming an internal path.
+  const names = ['a.yml', ...Array.from({ length: 200 }, (_, index) => `f${index}.yml`), 'c.yml', 'rollback']
+  const bulk = { ...config, profileFiles: names }
+  await seed('collide', Object.fromEntries(names.map((name) => [name, `${name}: old\n`])))
+  const uploaded = await core.uploadProfile('collide', { ghPath, config: bulk })
+  await core.gistPatch(ghPath, uploaded.gistId, {
+    files: Object.fromEntries(names.map((name) => [name, `${name}: new\n`])),
+  })
+
+  const dir = profileDir('collide')
+  let armed = false
+  const poller = setInterval(() => {
+    if (armed) return
+    try {
+      if (!fsSync.readdirSync(dir).some((name) => name.startsWith('.dsh-gist-settings-staging-'))) return
+      fsSync.rmSync(path.join(dir, 'c.yml'), { recursive: true, force: true })
+      fsSync.mkdirSync(path.join(dir, 'c.yml'))
+      armed = true
+    } catch {
+      // The staging directory is not there yet; try again next tick.
+    }
+  }, 1)
+
+  let error = null
+  try {
+    await core.downloadProfile('collide', { ghPath, config: bulk, force: true }).catch((thrown) => {
+      error = thrown
+    })
+  } finally {
+    clearInterval(poller)
+  }
+  if (!armed) return 'the failure injection did not land on this run, so nothing was exercised'
+
+  assert.ok(error, 'the commit must have failed')
+  assert.doesNotMatch(error.message, /EEXIST/, 'a tracked name must not decide whether the rollback runs')
+  assert.match(error.message, /were put back exactly as they were/)
+  assert.match(error.message, /The content from before this download is in/, 'the backup location must survive')
+  assert.equal(await read('collide', 'a.yml'), 'a.yml: old\n')
+})
+
+await check('a target that cannot be read back is reported as unverified, not as an edit', async () => {
+  const names = ['a.yml', ...Array.from({ length: 200 }, (_, index) => `f${index}.yml`), 'c.yml']
+  const bulk = { ...config, profileFiles: names }
+  await seed('unreadable', Object.fromEntries(names.map((name) => [name, `${name}: old\n`])))
+  const uploaded = await core.uploadProfile('unreadable', { ghPath, config: bulk })
+  await core.gistPatch(ghPath, uploaded.gistId, {
+    files: Object.fromEntries(names.map((name) => [name, `${name}: new\n`])),
+  })
+
+  const dir = profileDir('unreadable')
+  let armed = false
+  let unreadable = false
+  const poller = setInterval(() => {
+    try {
+      if (!armed) {
+        if (!fsSync.readdirSync(dir).some((name) => name.startsWith('.dsh-gist-settings-staging-'))) return
+        fsSync.rmSync(path.join(dir, 'c.yml'), { recursive: true, force: true })
+        fsSync.mkdirSync(path.join(dir, 'c.yml'))
+        armed = true
+        return
+      }
+      // Once the commit has installed its revision of `a.yml`, make that path one
+      // that reads as a file and cannot be read: a directory. The rollback then
+      // cannot tell whether the bytes are still its own.
+      const target = path.join(dir, 'a.yml')
+      if (fsSync.statSync(target).isFile() && fsSync.readFileSync(target, 'utf8') === 'a.yml: new\n') {
+        fsSync.rmSync(target, { force: true })
+        fsSync.mkdirSync(target)
+        unreadable = true
+      }
+    } catch {
+      // Not there yet, or already swapped; try again next tick.
+    }
+  }, 1)
+
+  let error = null
+  try {
+    await core.downloadProfile('unreadable', { ghPath, config: bulk, force: true }).catch((thrown) => {
+      error = thrown
+    })
+  } finally {
+    clearInterval(poller)
+  }
+  if (!unreadable) return 'the read failure did not land on this run, so nothing was exercised'
+
+  assert.ok(error, 'the commit must have failed')
+  assert.match(error.message, /Could not verify a\.yml/)
+  assert.doesNotMatch(
+    error.message,
+    /changed after this download wrote them/,
+    'an unreadable target is not evidence that somebody edited it',
+  )
+  assert.match(error.message, /The content from before this download is in/, 'the backup location must survive')
+  assert.equal(
+    fsSync.statSync(path.join(dir, 'a.yml')).isDirectory(),
+    true,
+    'and a target that cannot be read must be left exactly as it is',
+  )
+})
+
 /* ----------------------------------------------------------- forced deletion -- */
 
 await check('gist_upload with force really deletes the tracked file it is missing locally', async () => {
