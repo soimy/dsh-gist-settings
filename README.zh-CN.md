@@ -16,7 +16,7 @@
 | 同步引擎（`lib/core.ts`） | 已完成 |
 | Host 插件 + 4 个 agent 工具 | **已安装并生效**，可在会话中调用 |
 | 真实 GitHub 往返 | **已在真实账号上验证** |
-| 测试 | **七套共 180 项离线用例，另有 12 项真实用例**，全部通过 |
+| 测试 | **八套共 186 项离线用例，另有 12 项真实用例**，全部通过 |
 | CI | 在 Linux、Windows、macOS 上跑离线用例与仓库检查，覆盖 Node 22.19.0、22.x、24.x |
 | Client 设置页 | 尚未开始 —— 见[设置页](#设置页) |
 | 许可证 | MIT |
@@ -218,11 +218,11 @@ profile 被追踪的文件复制到 `<stateDir>/backups/<profile>/<时间戳>/`�
 原因：secret gist 是"不公开列出"，而不是"访问受控"。Node 的 `fetch` 不像 `gh` 那样遵循
 `HTTP(S)_PROXY` 与系统证书库，因此**传输层**失败会回退到 `gh` 本会发出的那个请求；HTTP 错误状态
 不会回退，因为 404 必须仍然是 404。截断只为**本 profile 追踪的文件**解析，所以别人通过网页界面加
-进去的大附件既不会让每次 status 都多一次请求，也不会把 status 弄挂。`test/regression.test.mjs`
-钉住这条路径的离线部分，`test/live.test.mjs` 用 1.5 MB 的文件对真实 GitHub 做往返来证明其余部分。
+进去的大附件既不会让每次 status 都多一次请求，也不会把 status 弄挂。`test/regression.test.ts`
+钉住这条路径的离线部分，`test/live.test.ts` 用 1.5 MB 的文件对真实 GitHub 做往返来证明其余部分。
 
 **不 import Harness 安装目录里的任何东西。** 工具定义是按 `defineTool` 的产物形状手写的普通
-对象。这让 bundle 不受模块解析方式变化的影响；`test/schema.test.mjs` 会重放 Harness **自带**的
+对象。这让 bundle 不受模块解析方式变化的影响；`test/schema.test.ts` 会重放 Harness **自带**的
 校验器，确保定义不会悄悄偏离契约。代价是 Harness 的版本闸门也看不到这个插件，因此
 `peerDependencies` 固定了它所针对的 DSH 版本。
 
@@ -241,8 +241,8 @@ cordis.patch.yml       bundle 补丁（插入插件行；并记录配置说明�
 client.js              Client 设置页（尚未编写）
 locale/{en,zh}.json    Plugin Manager 卡片用的展示元数据
 icon.svg               bundle 图标
-test/                  七套共 180 项离线用例，另有 12 项真实用例
-scripts/               check-changelog.mjs —— 校验 CHANGELOG.md
+test/                  八套共 186 项离线用例，另有 12 项真实用例
+scripts/               check-changelog.ts —— 校验 CHANGELOG.md
 .github/               Issue 表单与 PR 模板
 ```
 
@@ -282,21 +282,24 @@ npm run test:live       # 需显式开启：真实 GitHub
 里的 junction** 抵达这个包的，而 Node 拒绝对任何解析到 `node_modules` 下的文件做类型擦除 —— 它会抛
 `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING` —— 因此这个包无法"直接跑 TypeScript"。`npm run build`
 改为产出 `dist/index.js`、`dist/lib/core.js` 以及配套的 `.d.ts`，而 `package.json` 的 `exports["."]`
-指向 `./dist/index.js`；`dist/` 是重新生成的产物，不手工编辑，也不提交。各套件与 `scripts/` 仍是普通
-ESM `.mjs`，直接 import 那些 `.ts` 源码 —— 成立的原因正好相反：Node **会**对 `node_modules` 之外的
-文件做类型擦除 —— 所以单套件仍然可以 `node test/sync.test.mjs` 这样跑。
+指向 `./dist/index.js`；`dist/` 是重新生成的产物，不手工编辑，也不提交。各套件与 `scripts/` 同样是
+TypeScript，而且没有任何东西编译它们：它们直接 import 那些 `.ts` 源码，由 Node 在加载时擦除类型 ——
+成立的原因正好相反：在 `node_modules` 之外，擦除是允许的。所以单套件仍然可以
+`node test/sync.test.ts` 这样跑，不需要构建；只有 `test/entry.test.ts` 需要 `dist/`，而 `npm test`
+会先构建。`tsconfig.check.json` 同时覆盖运行时、测试与脚本，因此 `npm run typecheck` 会因为一处写错的
+测试而失败，正如它会因为一处写错的引擎代码而失败。
 
-`test/fake-gh.mjs` 是 `gh` 的内存替身，实现了 `--version`、`auth status` 和 `/gists` 接口，并可选
+`test/fake-gh.ts` 是 `gh` 的内存替身，实现了 `--version`、`auth status` 和 `/gists` 接口，并可选
 注入"截断文件""不可信的 `raw_url` 主机""HTTP 500""未登录的 CLI"。`sync`、`tools`、`regression`、
 `safety` 四套把 `ghPath` 指向它，因此整个生命周期 —— 创建、上传、下载、分叉、备份、清理、gist
 重建、幂等、恢复 —— 都能在无网络、无 GitHub 账号的情况下跑完。
 
-`test/schema.test.mjs` 会从 `process.execPath` 定位已安装的 `@deepseek-ai/dsh-tools`
+`test/schema.test.ts` 会从 `process.execPath` 定位已安装的 `@deepseek-ai/dsh-tools`
 （设置了 `DSH_TOOLS_DIR` 时会优先搜索它），并重放运行时的检查：注册契约、受支持的 JSON Schema 子集、
 参数校验，以及每个工具的返回值是否满足它声明的输出 schema。**找不到安装时它会失败而不是跳过** ——
 静默跳过会让 `npm test` 全绿但一个校验都没跑；想刻意接受跳过可设 `DSH_ALLOW_SCHEMA_SKIP=1`。
 
-`test/live.test.mjs` 需要**显式开启**，因为它会创建真实的 secret gist。它在系统临时目录下使用
+`test/live.test.ts` 需要**显式开启**，因为它会创建真实的 secret gist。它在系统临时目录下使用
 一次性的 `DSH_HOME`，因此不会读写你的真实 profile；即使断言失败，它也会删除自己创建的**每一个**
 gist。除 `gh api` 往返之外，它还覆盖了假替身无法作证的那条路径：被真实 GitHub 在 JSON 响应里
 截断的 1.5 MB 文件，能否从 API 给出的 `raw_url` 完整取回。
@@ -341,7 +344,7 @@ bundle 安装。这与 MIT 许可证并不冲突。
 
 对本仓库的对抗性审核曾发现：一次 `gh` 失败可能**杀死整个 Harness 进程**；所有 gist 读取错误都被
 当成"已被删除"，从而静默分叉备份；以及一次上传会删掉"仅本地缺失"文件在 gist 上的唯一副本。
-这些都已修复，并由 `test/regression.test.mjs` 覆盖 —— 该文件里每一条用例在修复被回退时都会失败。
+这些都已修复，并由 `test/regression.test.ts` 覆盖 —— 该文件里每一条用例在修复被回退时都会失败。
 
 审核同时确认了几件事本来就是正确的：注册契约、effect 与销毁生命周期、manifest，以及两侧哈希
 同一文件集时的分叉分类器。
@@ -361,5 +364,5 @@ profiles 目录本身是链接时，被删掉的 profile 会被误判为逃逸�
 文件的名字会被接受，随后让所有下载永久失败；state 写入失败会报成"下载失败"并残留临时文件；用于
 截断内容的 `fetch` 没有超时、没有体积上限、不校验重定向、也没有代理回退；一个未被追踪的大文件
 能让整个 profile 变成不可达；以及文档声称可以用 `gist_download` 的 `force` 应用远端删除，而实际
-没有任何代码路径做这件事。`test/safety.test.mjs`、`test/regression.test.mjs` 与
-`test/live.test.mjs` 为每一条都钉了用例。
+没有任何代码路径做这件事。`test/safety.test.ts`、`test/regression.test.ts` 与
+`test/live.test.ts` 为每一条都钉了用例。
