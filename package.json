@@ -31,7 +31,7 @@
     "typecheck": "tsc -p tsconfig.check.json",
     "pretest": "npm run build",
     "test": "node test/entry.test.mjs && node test/sync.test.mjs && node test/tools.test.mjs && node test/schema.test.mjs && node test/regression.test.mjs && node test/safety.test.mjs && node test/release.test.mjs && node test/docs.test.mjs && node scripts/check-changelog.mjs && node scripts/check-docs.mjs",
-    "test:entry": "node test/entry.test.mjs",
+    "test:entry": "npm run build && node test/entry.test.mjs",
     "test:sync": "node test/sync.test.mjs",
     "test:tools": "node test/tools.test.mjs",
     "test:schema": "node test/schema.test.mjs",

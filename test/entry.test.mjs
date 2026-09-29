@@ -142,12 +142,25 @@ await check('every registered tool declares what the registry requires', () => {
 await check('the built entry registers exactly what the source entry registers', async () => {
   // The artifact is compared against the file it was compiled from, so a `dist/`
   // left behind by an earlier edit fails here rather than being loaded silently.
+  // The fingerprint deliberately reaches past the declarations — member sets, each
+  // tool's output schema, what `output.render` produces for a probe value, and the
+  // concurrency verdict — because a comparison of `name`/`description`/`parameters`
+  // alone would call a build that changed only behaviour identical.
   const source = await import('../index.ts')
-  const shape = (definitions) =>
+  const fingerprint = (definitions) =>
     definitions
-      .map(({ name, description, parameters }) => ({ name, description, parameters }))
+      .map((definition) => ({
+        name: definition.name,
+        description: definition.description,
+        parameters: definition.parameters,
+        members: Object.keys(definition).sort(),
+        outputMembers: Object.keys(definition.output ?? {}).sort(),
+        schema: definition.output?.schema,
+        rendered: definition.output?.render({}, { text: 'probe' }),
+        concurrencySafe: definition.isConcurrencySafe?.() ?? null,
+      }))
       .sort((a, b) => (a.name < b.name ? -1 : 1))
-  assert.deepEqual(shape(registerFrom(built)), shape(registerFrom(source)))
+  assert.deepEqual(fingerprint(registerFrom(built)), fingerprint(registerFrom(source)))
 })
 
 /* ----------------------------------------------------------------- summary -- */

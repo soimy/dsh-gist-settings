@@ -35,9 +35,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   imports `index.ts` and `lib/core.ts` directly. This one loads the plugin the way the Cordis loader
   does, by package name through `exports`, and pins that the export names the build rather than the
   sources, that the artifact and its declarations exist, that a registering context gets all four tools
-  with the shape the registry requires, and that the build registers exactly what the source does.
-  Pointing the export at the sources, deleting the artifact, editing the build, or making the entry
-  register nothing each fail it — checked by making each of those changes in turn.
+  with the shape the registry requires, and that the build matches its source down to each tool's member
+  set, output schema, rendered probe value and concurrency verdict. Pointing the export at the sources,
+  deleting the artifact, editing the build, or making the entry register nothing each fail it — checked
+  by making each of those changes in turn. `npm run test:entry` builds first, so that command cannot
+  compare a stale artifact either.
 - **`npm run typecheck`**, which checks the runtime, the tests and the scripts together through
   `tsconfig.check.json` and emits nothing.
 - **A build before every test run.** `npm test` compiles first through its `pretest` step, so the
