@@ -10,6 +10,38 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **The plugin's own source is now TypeScript.** `index.ts` and `lib/core.ts` replace `index.js` and
+  `lib/core.js`. The tests and `scripts/` stay plain ESM and import those sources directly, because
+  Node does strip types for files outside `node_modules`. The engine's behaviour is unchanged — this
+  entry describes a change of notation, and nothing a user of the four tools can observe.
+- **The Harness loads compiled JavaScript, because it has to.** Shipping the `.ts` files and letting
+  Node strip them at load was measured before a single annotation was written, and it fails: a profile
+  reaches this package through a junction inside the profile's own `node_modules`, and Node refuses to
+  strip types for any file it resolves under `node_modules`
+  (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`). Both import paths the Cordis loader uses reject it,
+  while the same package with an `index.js` entry loads and registers all four tools. `npm run build`
+  therefore emits `dist/`, `exports["."]` names `./dist/index.js`, and `dist/` is generated output that
+  is never committed and never edited by hand.
+- **TypeScript is a development tool here, not a dependency.** `typescript` and `@types/node` are
+  exact-pinned devDependencies; the plugin still ships no runtime dependency and still imports nothing
+  outside `node:`.
+
+### Added
+
+- **`npm run typecheck`**, which checks the runtime, the tests and the scripts together through
+  `tsconfig.check.json` and emits nothing.
+- **A build before every test run.** `npm test` compiles first through its `pretest` step, so the
+  suites cannot pass against a stale `dist/`.
+- **`npm run build:watch`**, and the documentation that goes with it: the live Harness loads `dist/`,
+  so an edit to `index.ts` or `lib/core.ts` reaches it only after a rebuild.
+- **An install step in CI**, which the matrix job did not need before. It passes `--include=dev`, which
+  is load-bearing rather than decorative: npm omits devDependencies whenever `NODE_ENV=production`, and
+  that install then exits 0 having installed nothing, so the failure would surface later as a missing
+  `tsc`. The Harness install action passes the same flag, and now anchors its package resolution at
+  `package.json` rather than at the `index.js` that no longer exists.
+
 ## [0.2.0] - 2026-09-28
 
 Defects found by a re-review of the fixes below
