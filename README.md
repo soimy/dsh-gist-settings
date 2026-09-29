@@ -299,8 +299,9 @@ development tool only.
 npm run build           # tsc -p tsconfig.json → dist/, the JavaScript the Harness loads
 npm run build:watch     # the same, watching — keep it running while you work
 npm run typecheck       # tsc -p tsconfig.check.json: the whole repository, emitting nothing
-npm test                # builds first (pretest), then the seven offline suites (180 cases) plus the
+npm test                # builds first (pretest), then the eight offline suites (186 cases) plus the
                         # changelog and docs checks
+npm run test:entry      # the package export a profile loads: the build, and the four tools it registers
 npm run test:sync       # engine lifecycle against a fake gh
 npm run test:tools      # tool layer, argument validation, failure isolation
 npm run test:schema     # definitions vs. the installed Harness validators

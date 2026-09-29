@@ -267,7 +267,8 @@ scripts/               check-changelog.mjs —— 校验 CHANGELOG.md
 npm run build           # tsc -p tsconfig.json → dist/，即 Harness 加载的 JavaScript
 npm run build:watch     # 同上，持续监听 —— 开发时让它一直跑着
 npm run typecheck       # tsc -p tsconfig.check.json：检查整个仓库，不产出文件
-npm test                # 先构建（pretest），再跑七套离线用例（180 项）与 CHANGELOG、文档链接检查
+npm test                # 先构建（pretest），再跑八套离线用例（186 项）与 CHANGELOG、文档链接检查
+npm run test:entry      # profile 实际加载的 package export：构建产物，以及它注册的四个工具
 npm run test:sync       # 用假 gh 跑引擎完整生命周期
 npm run test:tools      # 工具层、参数校验、故障隔离
 npm run test:schema     # 定义 vs. Harness 自带校验器

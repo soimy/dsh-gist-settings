@@ -30,6 +30,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A package-entry suite**, `test/entry.test.mjs`, part of `npm test`: the runtime entry moved from
+  the sources to `dist/`, and nothing else in the repository crossed that boundary — every other suite
+  imports `index.ts` and `lib/core.ts` directly. This one loads the plugin the way the Cordis loader
+  does, by package name through `exports`, and pins that the export names the build rather than the
+  sources, that the artifact and its declarations exist, that a registering context gets all four tools
+  with the shape the registry requires, and that the build registers exactly what the source does.
+  Pointing the export at the sources, deleting the artifact, editing the build, or making the entry
+  register nothing each fail it — checked by making each of those changes in turn.
 - **`npm run typecheck`**, which checks the runtime, the tests and the scripts together through
   `tsconfig.check.json` and emits nothing.
 - **A build before every test run.** `npm test` compiles first through its `pretest` step, so the

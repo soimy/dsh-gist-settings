@@ -86,6 +86,7 @@ runs `npm run build` — so a test run cannot exercise a stale `dist/`.
 
 | Suite | Cases | Proves |
 |---|---|---|
+| `npm run test:entry` | 6 | The boundary a profile actually crosses. Other suites import the sources; this one loads the plugin the way the Cordis loader does — by package name, through `exports` — and pins that the export names the build rather than the sources, that the artifact and its declarations exist, that a registering context gets all four tools with the shape the registry requires, and that the build registers exactly what the source does. A wrong export, a missing or stale `dist/`, or an entry that loads and registers nothing each fail it. |
 | `npm run test:sync` | 19 | The engine's whole lifecycle against an in-memory `gh`: create, upload, divergence, download, backup, pruning, recreation, idempotency. |
 | `npm run test:tools` | 23 | The tool layer: registration, argument validation, config validation at load, profile-name resolution, and that one failing profile never aborts the others. |
 | `npm run test:schema` | 49 | The hand-written definitions against the Harness's *own* validators — the registration contract, the supported JSON Schema subset, argument validation, and that each returned value satisfies its declared output schema. |
@@ -303,6 +304,7 @@ plugin_manager  action: install_bundle  target: <此仓库的绝对路径>
 
 | 套件 | 用例数 | 证明的内容 |
 |---|---|---|
+| `npm run test:entry` | 6 | profile 真正跨过的那道边界。其他套件 import 源码；这一套按 Cordis loader 的方式加载插件 —— 按包名、经 `exports` —— 并钉住：export 指向的是构建产物而非源码、产物与其声明文件存在、注册的上下文拿到四个工具且形状满足注册要求、产物注册的内容与源码完全一致。export 写错、`dist/` 缺失或陈旧、入口加载成功却不注册工具，都会让它失败。 |
 | `npm run test:sync` | 19 | 引擎完整生命周期（内存版 gh）：创建、上传、分叉、下载、备份、清理、重建、幂等。 |
 | `npm run test:tools` | 23 | 工具层：注册、参数校验、加载时的配置校验、profile 名解析、单个 profile 失败不会中断其他。 |
 | `npm run test:schema` | 49 | 手写定义 vs Harness **自带**校验器：注册契约、受支持的 JSON Schema 子集、参数校验、返回值满足声明的输出 schema。 |
