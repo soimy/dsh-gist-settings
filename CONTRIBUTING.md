@@ -50,14 +50,30 @@ A feature that trades either away needs a strong argument in the issue.
 ```bash
 git clone https://github.com/soimy/dsh-gist-settings.git
 cd dsh-gist-settings
-npm test
+npm install --include=dev       # typescript and @types/node, both exact-pinned devDependencies
+npm test                        # builds through `pretest`, then runs the suites and the checks
 ```
 
-There are no dependencies to install — the plugin deliberately imports nothing from the Harness
-installation, and the tests use only Node built-ins.
+The plugin has no *runtime* dependencies: it deliberately imports nothing from the Harness
+installation, imports nothing outside `node:` and ships no dependency of its own, so the suites
+themselves use only Node built-ins. What that install adds is the toolchain — the type checker and the
+build — as exact-pinned devDependencies, and `--include=dev` is what makes it happen: npm omits
+devDependencies whenever `NODE_ENV=production`, and such an install exits 0 having installed nothing,
+which reads as success right up until `tsc` is missing.
+
+`index.ts` and `lib/core.ts` are the sources; the Harness loads `dist/`. A profile reaches this package
+through a junction inside the profile's own `node_modules`, and Node refuses to strip types for any file
+it resolves under `node_modules` — it throws `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING` — so the
+package cannot be run as raw TypeScript. `npm run build` compiles it (`tsc -p tsconfig.json`),
+`npm run build:watch` does the same while watching, and `npm run typecheck` checks the whole
+repository — runtime, tests and scripts — through `tsconfig.check.json` without emitting. `dist/` is
+regenerated output: never edited by hand, never committed. The suites and `scripts/` stay plain ESM
+`.mjs` and import the `.ts` sources directly, because Node does strip types outside `node_modules`, so
+a single suite still runs as `node test/sync.test.mjs`.
 
 To run it against a real profile, install the working copy as a bundle. `install_bundle` links the
-directory, so edits to `index.js` and `lib/` take effect on reload:
+directory, so what a reload picks up is `dist/`: an edit to `index.ts` or `lib/core.ts` reaches the
+running Harness only after a rebuild, which is what `npm run build:watch` is for.
 
 ```
 plugin_manager  action: install_bundle  target: <absolute path to this checkout>
@@ -65,10 +81,12 @@ plugin_manager  action: install_bundle  target: <absolute path to this checkout>
 
 ## What the test suites prove
 
-Knowing which suite covers what saves a lot of guessing.
+Knowing which suite covers what saves a lot of guessing. `npm test` compiles first — its `pretest` step
+runs `npm run build` — so a test run cannot exercise a stale `dist/`.
 
 | Suite | Cases | Proves |
 |---|---|---|
+| `npm run test:entry` | 6 | The boundary a profile actually crosses. Other suites import the sources; this one loads the plugin the way the Cordis loader does — by package name, through `exports` — and pins that the export names the build rather than the sources, that the artifact and its declarations exist, that a registering context gets all four tools with the shape the registry requires, and that the build registers exactly what the source does. A wrong export, a missing or stale `dist/`, or an entry that loads and registers nothing each fail it. |
 | `npm run test:sync` | 19 | The engine's whole lifecycle against an in-memory `gh`: create, upload, divergence, download, backup, pruning, recreation, idempotency. |
 | `npm run test:tools` | 23 | The tool layer: registration, argument validation, config validation at load, profile-name resolution, and that one failing profile never aborts the others. |
 | `npm run test:schema` | 49 | The hand-written definitions against the Harness's *own* validators — the registration contract, the supported JSON Schema subset, argument validation, and that each returned value satisfies its declared output schema. |
@@ -104,8 +122,12 @@ nothing about the code path a Windows user gets.
 
 Three things about it are deliberate:
 
-- **No install step.** The package has no dependencies and no lockfile, so `npm ci` would refuse to run
-  and there is nothing to install. `npm test` needs nothing but Node.
+- **The pinned toolchain is installed.** `npm test` builds the JavaScript the Harness loads — `pretest`
+  runs `tsc` — so each leg installs it with `npm install --include=dev`: `typescript` and `@types/node`,
+  both exact-pinned, and nothing else. The flag is load-bearing rather than decorative: npm omits
+  devDependencies whenever `NODE_ENV=production`, and such an install exits 0 having installed nothing,
+  so the failure would surface later as a missing `tsc`. There is still no `npm ci` — the package has no
+  runtime dependencies and deliberately commits no lockfile, so `npm ci` would refuse to run.
 - **`fail-fast` is off.** One platform failing does not cancel the others — which platform disagrees is
   usually the whole diagnosis.
 - **The live suite is not in CI.** It writes to a real GitHub account, so it needs a `gist`-scoped token
@@ -262,12 +284,15 @@ recoverable copy.
 ```bash
 git clone https://github.com/soimy/dsh-gist-settings.git
 cd dsh-gist-settings
-npm test
+npm install --include=dev       # typescript 与 @types/node，两者都是精确锁定的 devDependencies
+npm test                        # 先经由 `pretest` 构建，再跑各套件与各项检查
 ```
 
-**无需安装任何依赖**——插件刻意不 import Harness 安装目录里的任何东西，测试也只使用 Node 内置模块。
+插件没有**运行时**依赖：它刻意不 import Harness 安装目录里的任何东西，除 `node:` 外不 import 任何东西，也不自带任何依赖，因此各套件本身只使用 Node 内置模块。那次安装装的是构建工具链——类型检查器与构建——形式是精确锁定的 devDependencies；而 `--include=dev` 正是让它真的发生：只要 `NODE_ENV=production`，npm 就会跳过 devDependencies，那次安装会以退出码 0 结束、什么都没装，于是要到后面才发现 `tsc` 不见了。
 
-要在真实 profile 上运行，把工作副本作为 bundle 安装即可。`install_bundle` 用的是符号链接，所以改 `index.js` 和 `lib/` 重载后即生效：
+`index.ts` 与 `lib/core.ts` 是源码，而 Harness 加载 `dist/`。profile 是通过**它自己 `node_modules` 里的 junction** 抵达这个包的，而 Node 拒绝对任何解析到 `node_modules` 下的文件做类型擦除——它会抛 `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`——所以这个包无法"直接跑 TypeScript"。`npm run build` 负责编译（`tsc -p tsconfig.json`），`npm run build:watch` 是同一件事的监听模式，`npm run typecheck` 则通过 `tsconfig.check.json` 对整个仓库——运行时、测试与脚本——做检查且不产出文件。`dist/` 是重新生成的产物：不手工编辑，也不提交。各套件与 `scripts/` 仍是普通 ESM `.mjs`，直接 import 那些 `.ts` 源码，因为 Node **会**对 `node_modules` 之外的文件做类型擦除——所以单套件仍然可以 `node test/sync.test.mjs` 这样跑。
+
+要在真实 profile 上运行，把工作副本作为 bundle 安装即可。`install_bundle` 用的是符号链接，所以重载拿到的是 `dist/`：对 `index.ts` 或 `lib/core.ts` 的改动要等重新构建之后才会到达运行中的 Harness——这正是 `npm run build:watch` 的用途。
 
 ```
 plugin_manager  action: install_bundle  target: <此仓库的绝对路径>
@@ -275,8 +300,11 @@ plugin_manager  action: install_bundle  target: <此仓库的绝对路径>
 
 ### 各测试套件证明了什么
 
+知道哪套覆盖什么能省下大量猜测。`npm test` 会先编译——它的 `pretest` 步骤跑 `npm run build`——因此一次测试运行不可能对着陈旧的 `dist/` 跑。
+
 | 套件 | 用例数 | 证明的内容 |
 |---|---|---|
+| `npm run test:entry` | 6 | profile 真正跨过的那道边界。其他套件 import 源码；这一套按 Cordis loader 的方式加载插件 —— 按包名、经 `exports` —— 并钉住：export 指向的是构建产物而非源码、产物与其声明文件存在、注册的上下文拿到四个工具且形状满足注册要求、产物注册的内容与源码完全一致。export 写错、`dist/` 缺失或陈旧、入口加载成功却不注册工具，都会让它失败。 |
 | `npm run test:sync` | 19 | 引擎完整生命周期（内存版 gh）：创建、上传、分叉、下载、备份、清理、重建、幂等。 |
 | `npm run test:tools` | 23 | 工具层：注册、参数校验、加载时的配置校验、profile 名解析、单个 profile 失败不会中断其他。 |
 | `npm run test:schema` | 49 | 手写定义 vs Harness **自带**校验器：注册契约、受支持的 JSON Schema 子集、参数校验、返回值满足声明的输出 schema。 |
@@ -298,7 +326,7 @@ plugin_manager  action: install_bundle  target: <此仓库的绝对路径>
 
 其中三点是刻意的：
 
-- **没有安装步骤。** 本包没有任何依赖、也没有 lockfile，`npm ci` 会直接拒绝运行，而且也没有什么可装的。`npm test` 只需要 Node。
+- **会安装固定版本的构建工具链。** `npm test` 要构建 Harness 加载的那部分 JavaScript——`pretest` 会跑 `tsc`——所以每条支线都用 `npm install --include=dev` 装上它：`typescript` 与 `@types/node`，两者精确锁定，别无其他。这个参数是承重的而不是装饰：只要 `NODE_ENV=production`，npm 就会跳过 devDependencies，那次安装会以退出码 0 结束、什么都没装，于是故障要到后面才以"找不到 `tsc`"的形式浮现。这里仍然没有 `npm ci`——本包没有运行时依赖，也刻意不提交 lockfile，所以 `npm ci` 会直接拒绝运行。
 - **关掉了 `fail-fast`。** 一个平台失败不会取消其他平台——「哪个平台不同意」通常就是全部诊断信息。
 - **CI 里不含真实用例。** 它会写入真实 GitHub 账号，因此需要一个 `gist` 权限的 token，以及决定去花它的人。改动涉及 API 往返时请自己跑 `npm run test:live`；它会删除自己创建的每一个 gist。
 

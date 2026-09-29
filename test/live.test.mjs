@@ -24,7 +24,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import * as core from '../lib/core.js'
+import * as core from '../lib/core.ts'
 
 if (process.env.DSH_GIST_LIVE_TEST !== '1') {
   console.log('\nSKIP: set DSH_GIST_LIVE_TEST=1 to run the live GitHub suite (creates and deletes a gist).\n')

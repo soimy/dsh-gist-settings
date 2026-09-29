@@ -5,6 +5,10 @@ pnpm-lock.yaml
 # is not a supported path. Committing one would make it look like it is.
 package-lock.json
 
+# compiled output of `npm run build`: the half the Harness loads, regenerated
+# from index.ts and lib/, never edited by hand and never committed
+dist/
+
 # local runtime state (never commit: holds gist ids and local backup manifests)
 .gist-settings/
 *.local.json

@@ -15,7 +15,7 @@ guarded two-way sync are exposed as agent tools, so you can drive them from a co
 
 | Part | State |
 |---|---|
-| Sync engine (`lib/core.js`) | Done |
+| Sync engine (`lib/core.ts`) | Done |
 | Host plugin + agent tools | **Installed and live**; callable from a session |
 | Real GitHub round-trip | **Verified** against a real account |
 | Test suite | **180 offline cases across seven suites, plus 12 live cases**, all passing |
@@ -65,6 +65,10 @@ plugin_manager  action: install_bundle  target: <absolute path to this directory
 
 That links this directory into the profile, adds the bundle to `dsh.profile.bundles`, and applies the
 patch in `cordis.patch.yml`. Afterwards a restart is needed before a new module generation loads.
+
+Because the Harness loads `dist/`, build the checkout before installing it as a bundle:
+`npm install --include=dev && npm run build`. `dist/` is generated output and never committed, so a
+fresh clone starts without it (see [Development](#development)).
 
 Do not add the bundle row or the dependency to the profile by hand — `install_bundle` owns the
 selection. The row's `config:` block is yours to edit (see [Configuration](#configuration)).
@@ -259,8 +263,11 @@ the URLs accordingly.
 ## Repository layout
 
 ```
-index.js               Host plugin: registers the four agent tools
-lib/core.js            Sync engine — no Cordis dependency, directly testable
+index.ts               Host plugin: registers the four agent tools
+lib/core.ts            Sync engine — no Cordis dependency, directly testable
+tsconfig.json          Compiles index.ts and lib/ into dist/ — the half the Harness loads
+tsconfig.check.json    Type-checks runtime, tests and scripts without emitting
+dist/                  What `npm run build` emits; never edited by hand, never committed
 cordis.patch.yml       Bundle patch (inserts the plugin row; documents config)
 client.js              Client settings page (not yet written)
 locale/{en,zh}.json    Plugin display metadata for Plugin Manager cards
@@ -281,8 +288,20 @@ scripts/               check-changelog.mjs — validates CHANGELOG.md
 
 ## Development
 
+One-time setup installs the pinned toolchain with `npm install --include=dev`: `typescript` and
+`@types/node`, both exact-pinned devDependencies. That flag is load-bearing rather than decorative —
+npm omits devDependencies whenever `NODE_ENV=production`, and such an install exits 0 having installed
+nothing, which reads as success right up until `tsc` is missing. The plugin still has no *runtime*
+dependency: it imports nothing outside `node:` and ships no dependency of its own, so the compiler is a
+development tool only.
+
 ```bash
-npm test                # the seven offline suites (180 cases) plus the changelog and docs checks
+npm run build           # tsc -p tsconfig.json → dist/, the JavaScript the Harness loads
+npm run build:watch     # the same, watching — keep it running while you work
+npm run typecheck       # tsc -p tsconfig.check.json: the whole repository, emitting nothing
+npm test                # builds first (pretest), then the eight offline suites (186 cases) plus the
+                        # changelog and docs checks
+npm run test:entry      # the package export a profile loads: the build, and the four tools it registers
 npm run test:sync       # engine lifecycle against a fake gh
 npm run test:tools      # tool layer, argument validation, failure isolation
 npm run test:schema     # definitions vs. the installed Harness validators
@@ -291,6 +310,16 @@ npm run test:safety     # containment, atomic writes, forced deletion, recovery,
 npm run changelog:check # CHANGELOG.md structure and version consistency
 npm run test:live       # opt-in: real GitHub
 ```
+
+`index.ts` and `lib/core.ts` are the sources, and the Harness never loads them. A profile reaches this
+package through a junction inside the profile's own `node_modules`, and Node refuses to strip types for
+any file it resolves under `node_modules` — it throws `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING` — so
+the package cannot be run as raw TypeScript. `npm run build` instead emits `dist/index.js`,
+`dist/lib/core.js` and matching `.d.ts` files, and `package.json`'s `exports["."]` names
+`./dist/index.js`; `dist/` is regenerated output, never edited by hand and never committed. The suites
+and `scripts/` stay plain ESM `.mjs` and import the `.ts` sources directly, which works for the
+inverted reason — Node does strip types outside `node_modules` — so a single suite still runs as
+`node test/sync.test.mjs`.
 
 `test/fake-gh.mjs` is an in-memory stand-in for `gh` implementing `--version`, `auth status`, and the
 `/gists` API, with optional injection of truncated files, an untrusted `raw_url` host, HTTP 500s and a
@@ -321,7 +350,9 @@ DSH_GIST_LIVE_TEST=1 npm run test:live             # bash
 ```
 
 Because `install_bundle` links this directory into the profile, the working copy **is** the live
-plugin: edits to `index.js` and `lib/` take effect on reload.
+plugin — but what the Harness loads is `dist/`, so an edit to `index.ts` or `lib/core.ts` reaches it
+only after a rebuild. Keep `npm run build:watch` running while you work; a reload then picks up whatever
+`dist/` holds at that moment.
 
 ## The settings page
 

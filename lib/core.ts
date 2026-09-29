@@ -20,17 +20,346 @@ import path from 'node:path'
 export const DEFAULT_PROFILE_FILES = ['cordis.patch.yml', 'package.json']
 export const STATE_VERSION = 1
 
+/* ------------------------------------------------------------------ types -- */
+
+/**
+ * Every type below describes what the code already does; none of them replaces a
+ * runtime check. The validators that guard untrusted input — `normalizeTrackedName`,
+ * `loadState`, the containment walk — keep checking it, because this module is also
+ * reached from JavaScript and from hand-edited state files, where a type is no
+ * guarantee at all.
+ */
+
+/** A `gh` invocation: a path or bare command name, or `[command, ...prefixArgs]` for a wrapper such as `['wsl', 'gh']`. */
+export type GhPath = string | string[]
+
+/** This plugin's own `config:` block: where `gh`, the profiles and the state file live, and which files are tracked. */
+export interface Config {
+  ghPath?: GhPath
+  dshHome?: string
+  profilesDir?: string
+  stateDir?: string
+  profileFiles?: string[]
+}
+
+/** One tracked profile as recorded in the state file. Only `gistId` is ever required. */
+export interface ProfileRecord {
+  gistId: string
+  gistUrl?: string | null
+  description?: string
+  files?: string[]
+  lastSyncedHash?: string | null
+  lastSyncAt?: string
+  lastDirection?: string
+}
+
+/** The parsed state file: the schema version, plus one record per tracked profile. */
+export interface State {
+  version: number
+  profiles: Record<string, ProfileRecord | undefined>
+}
+
+/** What one `gh` invocation produced. Never a rejection: callers inspect `code`. */
+export interface GhRunResult {
+  code: number
+  stdout: string
+  stderr: string
+  timedOut?: boolean
+  spawnFailed?: boolean
+}
+
+/** Options for one `gh` invocation. */
+export interface GhRunOptions {
+  input?: string
+  cwd?: string
+  timeout?: number
+  signal?: AbortSignal
+}
+
+/**
+ * The outcome of locating `gh`: where it is, or why it could not be run.
+ *
+ * Deliberately flat rather than a union discriminated on `path`. Both this module
+ * and the tool layer test it with `if (!resolved.path)`, and a truthiness check
+ * cannot discriminate a `string | string[]` member from a `null` one — as far as
+ * the type is concerned `''` is a valid `GhPath`, even though `probe` only ever
+ * reports a path that `gh` exited 0 for. `reason` is present exactly when `path`
+ * is `null`, and `version` exactly when it is not.
+ */
+export interface GhResolution {
+  path: GhPath | null
+  version?: string
+  reason?: string
+  tried: GhPath[]
+}
+
+/**
+ * The `gh` half of the health report: whether it was found, and either where it is
+ * or why it was not.
+ *
+ * Flat as well, because it is built from a `GhResolution` whose `reason` is optional:
+ * the found report never carries a reason and the not-found report always does, but
+ * that correlation lives in prose here rather than in a second union.
+ */
+export interface GhHealth {
+  found: boolean
+  path?: GhPath
+  version?: string
+  reason?: string
+  tried?: GhPath[]
+}
+
+/** One `gh auth status` reading. */
+export interface AuthStatus {
+  authenticated: boolean
+  account: string | null
+  output: string
+}
+
+/** The health report: the resolved paths, plus gh and its authentication state. */
+export interface Health {
+  gh: GhHealth
+  auth: AuthStatus | null
+  dshHome: string
+  profilesDir: string
+  stateDir: string
+  statePath: string
+  trackedFiles: string[]
+}
+
+/** Every status string `profileStatus` can report. */
+export type ProfileStatusName =
+  | 'untracked'
+  | 'in-sync'
+  | 'local-ahead'
+  | 'remote-ahead'
+  | 'diverged'
+  | 'missing-local'
+  | 'missing-gist'
+  | 'unreachable'
+
+/**
+ * One profile's status row.
+ *
+ * A field a given status does not report is absent rather than empty: the list of
+ * local files means nothing when the gist could not be read at all, and the remote
+ * hashes only exist once it has been read and compared.
+ */
+export interface ProfileStatus {
+  profile: string
+  dir: string
+  status: ProfileStatusName
+  missing: string[]
+  localHash: string
+  gistId: string | null
+  localFiles?: string[]
+  gistUrl?: string | null
+  gistUpdatedAt?: string
+  error?: string
+  restorable?: string[]
+  remoteHash?: string
+  baseline?: string | null
+  remoteFiles?: string[]
+  untrackedRemoteFiles?: string[]
+  description?: string | null
+}
+
+/** The result of one upload: what was created or updated, and what was removed from the gist. */
+export interface UploadResult {
+  profile: string
+  gistId: string
+  gistUrl: string
+  created: boolean
+  replaced: string | null
+  pruned: string[]
+  dropped: string[]
+  uploadedFiles: string[]
+  missing: string[]
+  localHash: string
+}
+
+/** The result of one download: what was written, what was kept, and where the previous revision was backed up. */
+export interface DownloadResult {
+  profile: string
+  gistId: string
+  gistUrl: string
+  written: string[]
+  keptLocally: string[]
+  backupDir: string | null
+  remoteHash: string
+}
+
+/** Every action `syncProfile` can take on one profile. */
+export type SyncAction = 'created' | 'uploaded' | 'noop' | 'downloaded' | 'restored' | 'forced-upload'
+
+/**
+ * One profile's step in a bulk sync: the action taken, plus whatever the upload or
+ * download behind it returned. Which of those fields are present depends on the
+ * action, so they are optional rather than defaulted.
+ */
+export interface SyncResult {
+  profile: string
+  action: SyncAction
+  gistId?: string | null
+  gistUrl?: string | null
+  created?: boolean
+  replaced?: string | null
+  pruned?: string[]
+  dropped?: string[]
+  uploadedFiles?: string[]
+  missing?: string[]
+  localHash?: string
+  written?: string[]
+  keptLocally?: string[]
+  backupDir?: string | null
+  remoteHash?: string
+  republished?: string[]
+}
+
+/** One file entry of a gist API response; only the fields this module reads. */
+interface GistApiFile {
+  content?: string
+  truncated?: boolean
+  raw_url?: string
+}
+
+/**
+ * The subset of a gist API response this module reads.
+ *
+ * `id` and `html_url` are required here because everything downstream already
+ * treats them as present: the id is validated and written to the state file, and
+ * the URL is reported to the user.
+ */
+interface GistApiResponse {
+  id: string
+  html_url: string
+  description?: string | null
+  updated_at?: string
+  files?: Record<string, GistApiFile>
+}
+
+/** Options for one raw-content read: the caller's signal, the `fetch` to use, and the `gh` fallback. */
+interface RawFetchOptions {
+  signal?: AbortSignal
+  fetchImpl?: typeof fetch
+  ghPath?: GhPath
+}
+
+/** Options for reading a gist: as `RawFetchOptions`, plus the tracked subset whose full content is wanted. */
+interface GistGetOptions extends RawFetchOptions {
+  only?: string[]
+}
+
+/** Options for creating a gist. */
+interface GistCreateOptions {
+  description?: string
+  files?: Record<string, string>
+  isPublic?: boolean
+  signal?: AbortSignal
+}
+
+/** Options for patching a gist; a `null` file value deletes it. */
+interface GistPatchOptions {
+  description?: string
+  files?: Record<string, string | null>
+  signal?: AbortSignal
+}
+
+/**
+ * Options for a call that acts on one profile.
+ *
+ * `ghPath` is optional here only because every one of these entry points defaults
+ * its whole options object to `{}`; nothing in this repository omits it, and the
+ * `gh` helpers below require it, so a call site that reaches one asserts it.
+ */
+interface ProfileCallOptions {
+  ghPath?: GhPath
+  config?: Config
+  signal?: AbortSignal
+}
+
+/** As `ProfileCallOptions`, plus the state a status call has already read. */
+interface StatusOptions extends ProfileCallOptions {
+  state?: State
+}
+
+/** As `ProfileCallOptions`, plus the two upload-only knobs. */
+interface UploadOptions extends ProfileCallOptions {
+  description?: string
+  force?: boolean
+}
+
+/** As `ProfileCallOptions`, plus the flag that allows overwriting unsynced local edits. */
+interface DownloadOptions extends ProfileCallOptions {
+  force?: boolean
+}
+
+/**
+ * The extra, non-standard fields this module attaches to its own errors. They are
+ * read back with `in`-based narrowings, so the assertion at each throw site is the
+ * only thing claiming them.
+ */
+interface ModuleError extends Error {
+  code?: number
+  stderr?: string
+  notFound?: boolean
+  lockLost?: boolean
+}
+
+/** The recorded holder of a lock file, as far as it could be read. */
+interface LockOwner {
+  pid: number | null
+  host: string | null
+  mtime: number
+}
+
+/** What the in-process lock context carries: the lock file the call chain holds. */
+interface LockHandle {
+  target: string
+}
+
+/** The profile directory a read or write is bounded to: the lexical path and its resolved twin. */
+interface ProfileDirs {
+  dir: string
+  realDir: string
+}
+
+/** One tracked file on its way into the profile: `staged` is set once its copy has been written. */
+interface PlannedFile {
+  name: string
+  content: string
+  target: string
+  staged?: string
+}
+
+/* ----------------------------------------------------------------- errors -- */
+
+/** The message of a caught value, or its text form when it is not an `Error`. */
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/** The `code` a Node error carries (`ENOENT`, `EEXIST`, `EPERM`, …), or `undefined` for anything else. */
+function errorCode(error: unknown): string | undefined {
+  return error instanceof Error && 'code' in error && typeof error.code === 'string' ? error.code : undefined
+}
+
+/** Whether a caught value is the "the gist is really gone" error `ghJson` raises. */
+function isNotFoundError(error: unknown): boolean {
+  return error instanceof Error && 'notFound' in error && Boolean(error.notFound)
+}
+
 /* ------------------------------------------------------------------ paths -- */
 
 /** Expand a leading `~` the way the Harness's own home-path resolver does. */
-function expandHome(value) {
+function expandHome(value: string): string {
   if (value === '~') return os.homedir()
   if (value.startsWith('~/') || value.startsWith('~\\')) return path.join(os.homedir(), value.slice(2))
   return value
 }
 
 /** A configured path, or `undefined` when unset or blank. Always absolute. */
-function configuredPath(value) {
+function configuredPath(value: unknown): string | undefined {
   if (typeof value !== 'string' || value.trim() === '') return undefined
   // Resolving matters: `~/.dsh` — the shape the Harness itself displays — and any
   // relative value would otherwise name a different tree, resolved against the
@@ -38,15 +367,15 @@ function configuredPath(value) {
   return path.resolve(expandHome(value.trim()))
 }
 
-export function resolveDshHome(config = {}) {
+export function resolveDshHome(config: Config = {}): string {
   return configuredPath(config.dshHome) ?? configuredPath(process.env.DSH_HOME) ?? path.join(os.homedir(), '.dsh')
 }
 
-export function resolveProfilesDir(config = {}) {
+export function resolveProfilesDir(config: Config = {}): string {
   return configuredPath(config.profilesDir) ?? path.join(resolveDshHome(config), 'profiles')
 }
 
-export function resolveStateDir(config = {}) {
+export function resolveStateDir(config: Config = {}): string {
   return configuredPath(config.stateDir) ?? path.join(resolveDshHome(config), 'gist-settings')
 }
 
@@ -91,14 +420,17 @@ const WINDOWS_DEVICE_NAME = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/i
  * to `b`, because a name that means one thing to us and another to whoever
  * normalises it differently is exactly the ambiguity this plugin avoids elsewhere.
  */
-export function normalizeTrackedName(value) {
-  const reject = (why) => {
+export function normalizeTrackedName(value: string): string {
+  const reject = (why: string) => {
     throw new Error(
       `invalid tracked file name ${JSON.stringify(value)}: ${why}. An entry of profileFiles names one ` +
         'file directly inside the profile directory — and that same name is the file\'s name in the ' +
         'gist — for example "cordis.patch.yml".',
     )
   }
+  // The parameter is typed as a string because that is what every caller passes;
+  // the check stays, because a JavaScript caller or a hand-written config is not
+  // type-checked and must still be refused rather than trusted.
   if (typeof value !== 'string') reject(`it is a ${typeof value}, not a string`)
   else if (value === '') reject('it is empty')
   if (TRACKED_NAME_FORBIDDEN.test(value)) {
@@ -118,7 +450,7 @@ export function normalizeTrackedName(value) {
   return value
 }
 
-export function resolveProfileFiles(config = {}) {
+export function resolveProfileFiles(config: Config = {}): string[] {
   const files = config.profileFiles
   if (!Array.isArray(files) || files.length === 0) return [...DEFAULT_PROFILE_FILES]
   const names = files.map((file) => normalizeTrackedName(file))
@@ -130,7 +462,7 @@ export function resolveProfileFiles(config = {}) {
   // there the two spellings really are two different files.
   const foldsCase = process.platform === 'win32' || process.platform === 'darwin'
   const foldsUnicode = process.platform === 'darwin'
-  const seen = new Map()
+  const seen = new Map<string, string>()
   for (const name of names) {
     let key = name
     if (foldsUnicode) key = key.normalize('NFC')
@@ -147,7 +479,7 @@ export function resolveProfileFiles(config = {}) {
   return names
 }
 
-async function fileExists(target) {
+async function fileExists(target: string): Promise<boolean> {
   try {
     await fs.access(target)
     return true
@@ -166,14 +498,14 @@ async function fileExists(target) {
  * unresolved candidate, so a profile whose directory had been deleted would look
  * like an escape and the one recovery path that matters would refuse to run.
  */
-async function realpathAllowingMissing(target) {
+async function realpathAllowingMissing(target: string): Promise<string> {
   const missing = []
   let walk = target
   for (;;) {
     try {
       return path.join(await fs.realpath(walk), ...missing)
     } catch (error) {
-      if (error.code !== 'ENOENT') throw error
+      if (errorCode(error) !== 'ENOENT') throw error
     }
     const parent = path.dirname(walk)
     if (parent === walk) return path.resolve(target)
@@ -185,7 +517,7 @@ async function realpathAllowingMissing(target) {
 /* --------------------------------------------------------------- gh lookup -- */
 
 /** Candidate install locations, most-specific first, for hosts without a refreshed PATH. */
-function ghCandidates() {
+function ghCandidates(): string[] {
   const home = os.homedir()
   if (process.platform === 'win32') {
     return [
@@ -195,7 +527,10 @@ function ghCandidates() {
       process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Microsoft', 'WinGet', 'Links', 'gh.exe'),
       process.env.ProgramData && path.join(process.env.ProgramData, 'chocolatey', 'bin', 'gh.exe'),
       path.join(home, 'scoop', 'shims', 'gh.exe'),
-    ].filter(Boolean)
+      // The predicate is `Boolean` written out: it drops exactly the entries an
+      // unset environment variable contributed, and tells the compiler the rest
+      // are paths rather than paths-or-false.
+    ].filter((candidate): candidate is string => Boolean(candidate))
   }
   return [
     '/opt/homebrew/bin/gh',
@@ -210,10 +545,10 @@ function ghCandidates() {
  * Order: explicit config -> PATH -> well-known install dirs.
  * Returns `{ path, version }` or `{ path: null, reason }`.
  */
-export async function resolveGh(config = {}) {
-  const tried = []
+export async function resolveGh(config: Config = {}): Promise<GhResolution> {
+  const tried: GhPath[] = []
 
-  const probe = async (candidate, label) => {
+  const probe = async (candidate: GhPath, label: string) => {
     tried.push(candidate)
     const res = await ghRun(candidate, ['--version'])
     if (res.code === 0) {
@@ -257,12 +592,16 @@ export async function resolveGh(config = {}) {
  * A plain string is the normal case; an array lets a caller route gh through a
  * wrapper (`['wsl', 'gh']`, a shim script, or a test double).
  */
-export function ghCommandParts(ghPath) {
+export function ghCommandParts(ghPath: GhPath): string[] {
   return Array.isArray(ghPath) ? ghPath.map(String) : [String(ghPath)]
 }
 
 /** Run `gh` and capture output. Never rejects on a non-zero exit; inspect `code`. */
-export function ghRun(ghPath, args, { input, cwd, timeout = 60_000, signal } = {}) {
+export function ghRun(
+  ghPath: GhPath,
+  args: string[],
+  { input, cwd, timeout = 60_000, signal }: GhRunOptions = {},
+): Promise<GhRunResult> {
   const [command, ...prefix] = ghCommandParts(ghPath)
   return new Promise((resolve) => {
     let child
@@ -297,7 +636,7 @@ export function ghRun(ghPath, args, { input, cwd, timeout = 60_000, signal } = {
       // execFile throws synchronously for a command it refuses to spawn at all
       // (a `.cmd`/`.bat` shim on Windows, an invalid path). Callers expect a
       // result object, never a rejection.
-      resolve({ code: 127, stdout: '', stderr: `${command}: ${error.message}`, spawnFailed: true })
+      resolve({ code: 127, stdout: '', stderr: `${command}: ${errorMessage(error)}`, spawnFailed: true })
       return
     }
     if (input !== undefined) {
@@ -314,11 +653,13 @@ export function ghRun(ghPath, args, { input, cwd, timeout = 60_000, signal } = {
 }
 
 /** Run `gh` and parse stdout as JSON, raising a useful error when that fails. */
-async function ghJson(ghPath, args, opts = {}) {
+async function ghJson(ghPath: GhPath, args: string[], opts: GhRunOptions = {}): Promise<GistApiResponse> {
   const res = await ghRun(ghPath, args, opts)
   if (res.code !== 0) {
     const detail = (res.stderr || res.stdout || '').trim() || `gh exited with code ${res.code}`
-    const err = new Error(detail)
+    // The fields below are attached one statement at a time, exactly as before; the
+    // assertion is only what lets `Error` carry them for the catch sites to read.
+    const err = new Error(detail) as ModuleError
     err.code = res.code
     err.stderr = res.stderr
     // gh reports a deleted gist and a bad token with the same shape (exit 1, a
@@ -338,7 +679,7 @@ async function ghJson(ghPath, args, opts = {}) {
 
 /* ------------------------------------------------------------------- auth -- */
 
-export async function checkAuth(ghPath) {
+export async function checkAuth(ghPath: GhPath): Promise<AuthStatus> {
   const res = await ghRun(ghPath, ['auth', 'status'])
   const output = `${res.stdout}${res.stderr}`
   const authenticated = res.code === 0 && /Logged in to/i.test(output)
@@ -349,13 +690,13 @@ export async function checkAuth(ghPath) {
 /* --------------------------------------------------------------- profiles -- */
 
 /** List profile directory names, skipping the shared `node_modules` store. */
-export async function listProfiles(config = {}) {
+export async function listProfiles(config: Config = {}): Promise<string[]> {
   const dir = resolveProfilesDir(config)
   let entries
   try {
     entries = await fs.readdir(dir, { withFileTypes: true })
   } catch (error) {
-    if (error.code === 'ENOENT') return []
+    if (errorCode(error) === 'ENOENT') return []
     throw error
   }
   return entries
@@ -365,7 +706,7 @@ export async function listProfiles(config = {}) {
 }
 
 /** Throw unless `realTarget` names something strictly inside `boundaryRoot`. */
-function assertContained(boundaryRoot, realTarget, describe, boundary) {
+function assertContained(boundaryRoot: string, realTarget: string, describe: string, boundary: string): void {
   const relative = path.relative(boundaryRoot, realTarget)
   if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) {
     throw new Error(`${describe} resolves outside the ${boundary} (${realTarget}); refusing to read or write it`)
@@ -385,7 +726,7 @@ function assertContained(boundaryRoot, realTarget, describe, boundary) {
  * not enough: the tracked files inside it need the same treatment, against this
  * boundary rather than the outer one.
  */
-async function resolveProfileContext(profile, config = {}) {
+async function resolveProfileContext(profile: string, config: Config = {}) {
   const root = resolveProfilesDir(config)
   const candidate = path.join(root, profile)
   const [realRoot, realCandidate] = await Promise.all([
@@ -396,7 +737,7 @@ async function resolveProfileContext(profile, config = {}) {
   return { root, realRoot, dir: candidate, realDir: realCandidate }
 }
 
-export async function resolveProfileDir(profile, config = {}) {
+export async function resolveProfileDir(profile: string, config: Config = {}) {
   return (await resolveProfileContext(profile, config)).dir
 }
 
@@ -422,7 +763,7 @@ export async function resolveProfileDir(profile, config = {}) {
  * path. The **whole** path is returned in that case, never a shortened one: a
  * prefix would name the parent directory rather than the file.
  */
-async function resolveTrackedFile(profile, name, { dir, realDir }) {
+async function resolveTrackedFile(profile: string, name: string, { dir, realDir }: ProfileDirs): Promise<string> {
   const segments = normalizeTrackedName(name).split('/')
   let current = dir
   for (const segment of segments) {
@@ -431,7 +772,7 @@ async function resolveTrackedFile(profile, name, { dir, realDir }) {
     try {
       real = await fs.realpath(current)
     } catch (error) {
-      if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return path.join(dir, ...segments)
+      if (errorCode(error) === 'ENOENT' || errorCode(error) === 'ENOTDIR') return path.join(dir, ...segments)
       throw error
     }
     assertContained(realDir, real, `tracked file "${name}" of profile "${profile}"`, 'profile directory')
@@ -440,10 +781,10 @@ async function resolveTrackedFile(profile, name, { dir, realDir }) {
 }
 
 /** Read the tracked files of one profile. Missing files are reported, not fatal. */
-export async function collectProfile(profile, config = {}) {
+export async function collectProfile(profile: string, config: Config = {}) {
   const { dir, realDir } = await resolveProfileContext(profile, config)
   const wanted = resolveProfileFiles(config)
-  const files = {}
+  const files: Record<string, string> = {}
   const missing = []
   for (const name of wanted) {
     const target = await resolveTrackedFile(profile, name, { dir, realDir })
@@ -454,8 +795,8 @@ export async function collectProfile(profile, config = {}) {
       // cannot exist. It is reported as absent rather than fatal, which lets a
       // download reach the staging step and fail there with a message naming the
       // real cause instead of surfacing a bare filesystem error code.
-      if (error.code === 'ENOENT' || error.code === 'ENOTDIR') missing.push(name)
-      else if (error.code === 'EISDIR') {
+      if (errorCode(error) === 'ENOENT' || errorCode(error) === 'ENOTDIR') missing.push(name)
+      else if (errorCode(error) === 'EISDIR') {
         throw new Error(`tracked file "${name}" of profile "${profile}" is a directory, not a file`)
       } else throw error
     }
@@ -464,7 +805,7 @@ export async function collectProfile(profile, config = {}) {
 }
 
 /** Stable content hash over a `{ filename: content }` map. */
-export function hashFiles(files) {
+export function hashFiles(files: Record<string, string>): string {
   const hash = createHash('sha256')
   for (const name of Object.keys(files).sort()) {
     hash.update(name)
@@ -477,7 +818,7 @@ export function hashFiles(files) {
 
 /* ------------------------------------------------------------------ state -- */
 
-function statePath(config = {}) {
+function statePath(config: Config = {}): string {
   return path.join(resolveStateDir(config), 'state.json')
 }
 
@@ -489,13 +830,13 @@ function statePath(config = {}) {
  */
 const GIST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]*$/
 
-export async function loadState(config = {}) {
+export async function loadState(config: Config = {}): Promise<State> {
   const target = statePath(config)
   let raw
   try {
     raw = await fs.readFile(target, 'utf8')
   } catch (error) {
-    if (error.code === 'ENOENT') return { version: STATE_VERSION, profiles: {} }
+    if (errorCode(error) === 'ENOENT') return { version: STATE_VERSION, profiles: {} }
     throw error
   }
 
@@ -517,8 +858,11 @@ export async function loadState(config = {}) {
     throw new Error(`${target} has an invalid "profiles" section; expected an object keyed by profile name.`)
   }
 
-  const clean = {}
-  for (const [name, record] of Object.entries(profiles ?? {})) {
+  const clean: Record<string, ProfileRecord> = {}
+  // The checks in this loop are what actually validate a hand-edited file; the
+  // assertion only names the shape they establish, which a `typeof` narrowing on a
+  // JSON value cannot express.
+  for (const [name, record] of Object.entries(profiles ?? {}) as [string, ProfileRecord][]) {
     if (!record || typeof record !== 'object' || Array.isArray(record)) {
       throw new Error(`${target}: record for profile "${name}" is not an object.`)
     }
@@ -556,7 +900,7 @@ export async function loadState(config = {}) {
  * a nested call from a second independent caller that must still queue.
  */
 let stateLock = Promise.resolve()
-const lockContext = new AsyncLocalStorage()
+const lockContext = new AsyncLocalStorage<LockHandle>()
 
 /** Age at which a lock file with an unreadable or foreign owner may be reclaimed. */
 const FOREIGN_LOCK_STALE_MS = 60_000
@@ -572,20 +916,20 @@ const FOREIGN_LOCK_STALE_MS = 60_000
 const LOCK_WAIT_MS = 150_000
 const LOCK_POLL_MS = 100
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
-function lockFilePath(config = {}) {
+function lockFilePath(config: Config = {}): string {
   return path.join(resolveStateDir(config), 'state.lock')
 }
 
 /** `kill(pid, 0)` sends no signal; it only asks the OS whether the pid exists. */
-function processIsAlive(pid) {
+function processIsAlive(pid: number): boolean {
   try {
     process.kill(pid, 0)
     return true
   } catch (error) {
     // EPERM means the process exists but belongs to someone else.
-    return error.code === 'EPERM'
+    return errorCode(error) === 'EPERM'
   }
 }
 
@@ -596,15 +940,15 @@ function processIsAlive(pid) {
  * so the caller falls back to the age rule instead of treating a lock it merely
  * failed to parse as free.
  */
-async function readLockOwner(target) {
+async function readLockOwner(target: string): Promise<LockOwner | null> {
   let stat
   try {
     stat = await fs.stat(target)
   } catch {
     return null
   }
-  let pid = null
-  let host = null
+  let pid: number | null = null
+  let host: string | null = null
   try {
     const [rawPid, rawHost] = (await fs.readFile(target, 'utf8')).trim().split(/\s+/)
     if (/^\d+$/.test(rawPid ?? '')) {
@@ -617,7 +961,7 @@ async function readLockOwner(target) {
   return { pid, host, mtime: stat.mtimeMs }
 }
 
-function lockIsStale(owner) {
+function lockIsStale(owner: LockOwner | null): boolean {
   if (!owner) return true
   // Same machine: the pid is authoritative, so a crashed holder is reclaimed at
   // once and a slow but perfectly live holder is never stolen from.
@@ -628,7 +972,7 @@ function lockIsStale(owner) {
 }
 
 /** The error a waiter gets when the lock never comes free. */
-function lockTimeout(target, owner) {
+function lockTimeout(target: string, owner: LockOwner | null): Error {
   return new Error(
     `timed out after ${LOCK_WAIT_MS} ms waiting for ${target}, held by ` +
       `${owner?.pid ? `pid ${owner.pid}` : 'an unknown process'}${owner?.host ? ` on ${owner.host}` : ''}. ` +
@@ -672,14 +1016,14 @@ const RECLAIM_TAKEOVER_MS = 5_000
  *
  * Returns true when it is worth retrying the exclusive create at once.
  */
-async function reclaimStaleLock(target) {
+async function reclaimStaleLock(target: string): Promise<boolean> {
   const token = `${target}.reclaim`
   const payload = `${process.pid} ${os.hostname()}\n`
 
   try {
     await fs.writeFile(token, payload, { flag: 'wx' })
   } catch (error) {
-    if (error.code !== 'EEXIST') throw error
+    if (errorCode(error) !== 'EEXIST') throw error
     const holder = await readLockOwner(token)
     if (!holder || Date.now() - holder.mtime < RECLAIM_TAKEOVER_MS) return false
     // Whoever wins the removal, the token becomes free and the `wx` create below
@@ -700,20 +1044,20 @@ async function reclaimStaleLock(target) {
 /**
  * Take the lock file, or wait for its holder. Returns an async release function.
  */
-async function acquireStateLock(config) {
+async function acquireStateLock(config: Config): Promise<() => Promise<void>> {
   const dir = resolveStateDir(config)
   await fs.mkdir(dir, { recursive: true })
   const target = lockFilePath(config)
   const payload = `${process.pid} ${os.hostname()}\n`
   const deadline = Date.now() + LOCK_WAIT_MS
-  let owner = null
+  let owner: LockOwner | null = null
 
   for (;;) {
     try {
       await fs.writeFile(target, payload, { flag: 'wx' })
       break
     } catch (error) {
-      if (error.code !== 'EEXIST') throw error
+      if (errorCode(error) !== 'EEXIST') throw error
     }
 
     owner = await readLockOwner(target)
@@ -746,7 +1090,7 @@ async function acquireStateLock(config) {
   }
 }
 
-export async function withStateLock(fn, config = {}) {
+export async function withStateLock<T>(fn: () => Promise<T>, config: Config = {}): Promise<T> {
   if (lockContext.getStore()) {
     throw new Error(
       'withStateLock is not reentrant: a lock is already held in this call chain, so taking it again ' +
@@ -754,13 +1098,13 @@ export async function withStateLock(fn, config = {}) {
     )
   }
   const previous = stateLock
-  let releaseChain
+  let releaseChain: (() => void) | undefined
   stateLock = new Promise((resolve) => {
     releaseChain = resolve
   })
   await previous
 
-  let releaseFile = null
+  let releaseFile: (() => Promise<void>) | null = null
   try {
     releaseFile = await acquireStateLock(config)
     return await lockContext.run({ target: lockFilePath(config) }, fn)
@@ -770,12 +1114,14 @@ export async function withStateLock(fn, config = {}) {
     } finally {
       // Always let the next in-process caller through, even if releasing the
       // lock file threw: a chain that stops resolving wedges every later call.
-      releaseChain()
+      // The assertion is safe because a Promise executor runs synchronously: the
+      // assignment above happens before this line can be reached.
+      releaseChain!()
     }
   }
 }
 
-export async function saveState(state, config = {}) {
+export async function saveState(state: State, config: Config = {}): Promise<string> {
   const dir = resolveStateDir(config)
   await fs.mkdir(dir, { recursive: true })
   const target = statePath(config)
@@ -792,7 +1138,7 @@ export async function saveState(state, config = {}) {
       const error = new Error(
         `state lock ${held.target} is no longer held by this process, so another writer may be recording ` +
           'a newer revision. Refusing to overwrite it with this one.',
-      )
+      ) as ModuleError
       error.lockLost = true
       throw error
     }
@@ -818,11 +1164,16 @@ export async function saveState(state, config = {}) {
 /* ------------------------------------------------------------- gist calls -- */
 
 /** Create a secret gist. Returns `{ id, url, files }`. */
-export async function gistCreate(ghPath, { description, files, isPublic = false, signal } = {}) {
+export async function gistCreate(
+  ghPath: GhPath,
+  { description, files, isPublic = false, signal }: GistCreateOptions = {},
+) {
   const body = JSON.stringify({
     description,
     public: isPublic,
-    files: Object.fromEntries(Object.entries(files).map(([name, content]) => [name, { content }])),
+    // `files` is optional only because the options object itself defaults to `{}`;
+    // every caller passes it, and `Object.entries(undefined)` threw before too.
+    files: Object.fromEntries(Object.entries(files!).map(([name, content]) => [name, { content }])),
   })
   const result = await ghJson(
     ghPath,
@@ -833,7 +1184,7 @@ export async function gistCreate(ghPath, { description, files, isPublic = false,
 }
 
 /** Whether a response-provided `raw_url` may be followed. */
-function isTrustedRawUrl(value) {
+function isTrustedRawUrl(value: unknown): value is string {
   if (typeof value !== 'string') return false
   let url
   try {
@@ -857,7 +1208,7 @@ const MAX_RAW_BYTES = 64 * 1024 * 1024
 const RAW_FETCH_TIMEOUT_MS = 60_000
 
 /** Read a response body, refusing to buffer an unbounded one into memory. */
-async function readBounded(response, url) {
+async function readBounded(response: Response, url: string): Promise<string> {
   if (!response.body) return await response.text()
   const chunks = []
   let total = 0
@@ -872,7 +1223,7 @@ async function readBounded(response, url) {
 }
 
 /** Ask gh for the URL. The fallback path, not the documented one — see below. */
-async function ghFetchRaw(ghPath, url, { signal } = {}) {
+async function ghFetchRaw(ghPath: GhPath, url: string, { signal }: GhRunOptions = {}): Promise<string> {
   const result = await ghRun(ghPath, ['api', url], { signal })
   if (result.code !== 0) {
     throw new Error((result.stderr || '').trim() || `gh exited with code ${result.code}`)
@@ -899,7 +1250,10 @@ async function ghFetchRaw(ghPath, url, { signal } = {}) {
  * a *transport* failure falls back to the request gh would have made. An HTTP
  * error status does not: a 404 has to stay a 404.
  */
-async function fetchRawContent(url, { signal, fetchImpl = globalThis.fetch, ghPath } = {}) {
+async function fetchRawContent(
+  url: string,
+  { signal, fetchImpl = globalThis.fetch, ghPath }: RawFetchOptions = {},
+): Promise<string> {
   const timeout = AbortSignal.timeout(RAW_FETCH_TIMEOUT_MS)
   const deadline = signal ? AbortSignal.any([signal, timeout]) : timeout
   let response
@@ -941,10 +1295,10 @@ async function fetchRawContent(url, { signal, fetchImpl = globalThis.fetch, ghPa
  * file. `fileNames` always lists every file in the gist, which is what pruning
  * needs.
  */
-export async function gistGet(ghPath, gistId, { signal, fetchImpl, only } = {}) {
+export async function gistGet(ghPath: GhPath, gistId: string, { signal, fetchImpl, only }: GistGetOptions = {}) {
   const result = await ghJson(ghPath, ['api', `/gists/${gistId}`], { signal })
-  const files = {}
-  const truncated = []
+  const files: Record<string, string> = {}
+  const truncated: string[] = []
   const fileNames = Object.keys(result.files ?? {})
   for (const [name, meta] of Object.entries(result.files ?? {})) {
     if (meta.truncated) {
@@ -962,7 +1316,7 @@ export async function gistGet(ghPath, gistId, { signal, fetchImpl, only } = {}) 
       } catch (error) {
         throw new Error(
           `gist file "${name}" is truncated and its raw content could not be fetched from ` +
-            `${meta.raw_url}: ${error.message}`,
+            `${meta.raw_url}: ${errorMessage(error)}`,
         )
       }
     } else {
@@ -981,8 +1335,12 @@ export async function gistGet(ghPath, gistId, { signal, fetchImpl, only } = {}) 
 }
 
 /** Patch a gist. Pass `null` as a file's value to delete it. */
-export async function gistPatch(ghPath, gistId, { description, files, signal } = {}) {
-  const payload = {}
+export async function gistPatch(
+  ghPath: GhPath,
+  gistId: string,
+  { description, files, signal }: GistPatchOptions = {},
+) {
+  const payload: { description?: string; files?: Record<string, { content: string } | null> } = {}
   if (description !== undefined) payload.description = description
   if (files) {
     payload.files = Object.fromEntries(
@@ -997,14 +1355,14 @@ export async function gistPatch(ghPath, gistId, { description, files, signal } =
   return { id: result.id, url: result.html_url, updatedAt: result.updated_at }
 }
 
-export async function gistDelete(ghPath, gistId) {
+export async function gistDelete(ghPath: GhPath, gistId: string): Promise<void> {
   const res = await ghRun(ghPath, ['api', '--method', 'DELETE', `/gists/${gistId}`])
   if (res.code !== 0) throw new Error((res.stderr || '').trim() || 'failed to delete gist')
 }
 
 /* -------------------------------------------------------------- the verbs -- */
 
-export function defaultDescription(profile) {
+export function defaultDescription(profile: string): string {
   return `DeepSeek Harness profile config: ${profile}`
 }
 
@@ -1022,7 +1380,10 @@ export function defaultDescription(profile) {
  * When both sides already agree this repairs a stale baseline in the state
  * file. It never touches profile files or the gist.
  */
-export async function profileStatus(profile, { ghPath, config = {}, state, signal } = {}) {
+export async function profileStatus(
+  profile: string,
+  { ghPath, config = {}, state, signal }: StatusOptions = {},
+): Promise<ProfileStatus> {
   const current = state ?? (await loadState(config))
   const record = current.profiles?.[profile]
   const trackedNames = resolveProfileFiles(config)
@@ -1037,9 +1398,11 @@ export async function profileStatus(profile, { ghPath, config = {}, state, signa
 
   let remote
   try {
-    remote = await gistGet(ghPath, record.gistId, { signal, only: trackedNames })
+    // `ghPath` is optional in the options only because they default to `{}`; every
+    // caller supplies one, and a profile with a gist cannot be reached without it.
+    remote = await gistGet(ghPath!, record.gistId, { signal, only: trackedNames })
   } catch (error) {
-    if (!error.notFound) {
+    if (!isNotFoundError(error)) {
       // A 401, a 5xx, a rate limit, a DNS failure: the gist may be perfectly
       // intact. Calling this "deleted" is exactly what would make a later
       // upload mint a replacement and abandon the original.
@@ -1051,7 +1414,7 @@ export async function profileStatus(profile, { ghPath, config = {}, state, signa
         localHash,
         gistId: record.gistId,
         gistUrl: record.gistUrl ?? null,
-        error: error.message,
+        error: errorMessage(error),
       }
     }
     return {
@@ -1076,7 +1439,7 @@ export async function profileStatus(profile, { ghPath, config = {}, state, signa
   // tools must not resolve on their own.
   const restorable = missing.filter((name) => name in remote.files)
 
-  let status
+  let status: ProfileStatusName
   if (restorable.length > 0) {
     status = 'missing-local'
   } else if (localHash === remoteHash) {
@@ -1148,16 +1511,16 @@ export async function profileStatus(profile, { ghPath, config = {}, state, signa
  * the duplicate is real, and hiding one of the pair would hide the thing that
  * needs deleting.
  */
-export async function listKnownProfiles(config = {}) {
+export async function listKnownProfiles(config: Config = {}): Promise<string[]> {
   const [local, state] = await Promise.all([listProfiles(config), loadState(config)])
   const names = new Set(local)
   for (const name of Object.keys(state.profiles ?? {})) names.add(name)
   return [...names].sort()
 }
 
-export async function statusAll({ ghPath, config = {} } = {}) {
+export async function statusAll({ ghPath, config = {} }: ProfileCallOptions = {}) {
   const state = await loadState(config)
-  const rows = []
+  const rows: ProfileStatus[] = []
   for (const profile of await listKnownProfiles(config)) {
     rows.push(await profileStatus(profile, { ghPath, config, state }))
   }
@@ -1175,7 +1538,7 @@ export async function statusAll({ ghPath, config = {} } = {}) {
  * Only the write paths call this. A state file that already holds such a pair
  * from an earlier version must still be readable, so reads are left alone.
  */
-function assertNoCaseCollision(state, profile) {
+function assertNoCaseCollision(state: State, profile: string): void {
   const collision = Object.keys(state.profiles ?? {}).find(
     (key) => key !== profile && key.toLowerCase() === profile.toLowerCase(),
   )
@@ -1189,7 +1552,7 @@ function assertNoCaseCollision(state, profile) {
 }
 
 /** Back up the profile's tracked files before any destructive write. */
-async function backupProfile(profile, config = {}) {
+async function backupProfile(profile: string, config: Config = {}): Promise<string | null> {
   const { files } = await collectProfile(profile, config)
   if (Object.keys(files).length === 0) return null
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
@@ -1216,9 +1579,9 @@ async function backupProfile(profile, config = {}) {
  * original while other machines kept syncing to it.
  */
 export async function uploadProfile(
-  profile,
-  { ghPath, config = {}, description, force = false, signal } = {},
-) {
+  profile: string,
+  { ghPath, config = {}, description, force = false, signal }: UploadOptions = {},
+): Promise<UploadResult> {
   return withStateLock(async () => {
     const state = await loadState(config)
     assertNoCaseCollision(state, profile)
@@ -1233,18 +1596,20 @@ export async function uploadProfile(
     let gistId = record?.gistId
     let url = record?.gistUrl
     let created = false
-    let replaced = null
-    const pruned = []
-    let dropped = []
+    let replaced: string | null = null
+    const pruned: string[] = []
+    let dropped: string[] = []
 
     if (gistId) {
       let existing = null
       try {
-        existing = await gistGet(ghPath, gistId, { signal, only: trackedNames })
+        // As in `profileStatus`: `ghPath` is optional in the options, never absent
+        // from a real call.
+        existing = await gistGet(ghPath!, gistId, { signal, only: trackedNames })
       } catch (error) {
-        if (!error.notFound) {
+        if (!isNotFoundError(error)) {
           throw new Error(
-            `could not read gist ${gistId} for profile "${profile}": ${error.message}. Refusing to ` +
+            `could not read gist ${gistId} for profile "${profile}": ${errorMessage(error)}. Refusing to ` +
               'create a replacement gist, which would abandon the existing backup; retry when reachable.',
           )
         }
@@ -1271,7 +1636,8 @@ export async function uploadProfile(
         dropped = force ? lost : []
         const removals = Object.fromEntries([...pruned, ...dropped].map((name) => [name, null]))
         signal?.throwIfAborted()
-        const patched = await gistPatch(ghPath, gistId, {
+        // Optional in the options, supplied by every caller — see the read above.
+        const patched = await gistPatch(ghPath!, gistId, {
           description: desc,
           files: { ...files, ...removals },
           signal,
@@ -1279,14 +1645,17 @@ export async function uploadProfile(
         url = patched.url
       } else {
         // A genuine 404: the gist is gone and this machine holds the only copy.
-        replaced = record.gistUrl ?? null
+        // `gistId` came from this record, so the record is present here; only the
+        // optional-chained read above keeps that from the compiler.
+        replaced = record!.gistUrl ?? null
         gistId = undefined
       }
     }
 
     if (!gistId) {
       signal?.throwIfAborted()
-      const fresh = await gistCreate(ghPath, { description: desc, files, signal })
+      // Optional in the options, supplied by every caller — see the read above.
+      const fresh = await gistCreate(ghPath!, { description: desc, files, signal })
       gistId = fresh.id
       url = fresh.url
       created = true
@@ -1314,7 +1683,7 @@ export async function uploadProfile(
       // abandons this one.
       throw new Error(
         `the gist ${url} was ${created ? 'created' : 'updated'} for profile "${profile}", but recording it ` +
-          `in ${statePath(config)} failed (${error.message}). The gist exists; make the state directory ` +
+          `in ${statePath(config)} failed (${errorMessage(error)}). The gist exists; make the state directory ` +
           'writable before retrying, or the next upload will create a second one.',
       )
     }
@@ -1322,7 +1691,10 @@ export async function uploadProfile(
     return {
       profile,
       gistId,
-      gistUrl: url,
+      // Every path that reaches here overwrites the record's URL — with the patched
+      // one, or with the one the create returned — so this is a string in fact; the
+      // compiler cannot see through the branch that decides which.
+      gistUrl: url!,
       created,
       replaced,
       pruned,
@@ -1335,7 +1707,10 @@ export async function uploadProfile(
 }
 
 /** Whether every local tracked file is byte-identical to its counterpart in the gist. */
-function localIsSubsetOfRemote(localFiles, remoteFiles) {
+function localIsSubsetOfRemote(
+  localFiles: Record<string, string>,
+  remoteFiles: Record<string, string>,
+): boolean {
   return Object.keys(localFiles).every(
     (name) => name in remoteFiles && remoteFiles[name] === localFiles[name],
   )
@@ -1354,7 +1729,7 @@ function localIsSubsetOfRemote(localFiles, remoteFiles) {
  * in case were already refused by `resolveProfileFiles` where the filesystem folds
  * case, and folding again would collide two real files elsewhere.
  */
-async function targetIdentity(target) {
+async function targetIdentity(target: string): Promise<string> {
   try {
     const stats = await fs.stat(target, { bigint: true })
     if (stats.ino !== 0n) return `id:${stats.dev}:${stats.ino}`
@@ -1373,10 +1748,28 @@ async function targetIdentity(target) {
  * from what this run read out of the profile at the start — the same bytes the
  * backup holds — and a file that did not exist before is removed again.
  */
-async function rollbackFiles({ profile, dir, realDir, done, localFiles, staged, backupDir, cause }) {
-  const verifyFailed = []
-  const restoreFailed = []
-  const conflicted = []
+async function rollbackFiles({
+  profile,
+  dir,
+  realDir,
+  done,
+  localFiles,
+  staged,
+  backupDir,
+  cause,
+}: {
+  profile: string
+  dir: string
+  realDir: string
+  done: { name: string; content: string }[]
+  localFiles: Record<string, string>
+  staged: string
+  backupDir: string | null
+  cause: unknown
+}): Promise<Error> {
+  const verifyFailed: string[] = []
+  const restoreFailed: string[] = []
+  const conflicted: string[] = []
   // Restore copies are written straight into the staging directory, under a name
   // carrying a token generated for this call. Never into a fixed subdirectory such
   // as `rollback`: a profile may track a file by that name, and if that file has not
@@ -1412,7 +1805,7 @@ async function rollbackFiles({ profile, dir, realDir, done, localFiles, staged, 
       try {
         current = await fs.readFile(target, 'utf8')
       } catch (error) {
-        verifyFailed.push(`${item.name} (${error.message})`)
+        verifyFailed.push(`${item.name} (${errorMessage(error)})`)
         continue
       }
       if (current !== item.content) {
@@ -1432,11 +1825,11 @@ async function rollbackFiles({ profile, dir, realDir, done, localFiles, staged, 
       await fs.writeFile(restore, previous, 'utf8')
       await fs.rename(restore, target)
     } catch (error) {
-      restoreFailed.push(`${item.name} (${error.message})`)
+      restoreFailed.push(`${item.name} (${errorMessage(error)})`)
     }
   }
 
-  const parts = []
+  const parts: string[] = []
   if (verifyFailed.length) {
     parts.push(
       `Could not verify ${verifyFailed.join(', ')} — those were left untouched, because a rollback that ` +
@@ -1461,7 +1854,7 @@ async function rollbackFiles({ profile, dir, realDir, done, localFiles, staged, 
       ? `The content from before this download is in ${backupDir}.`
       : 'Nothing of this profile existed locally before the download, so there is nothing else to recover.',
   )
-  return new Error(`failed to write profile "${profile}": ${cause.message}. ${parts.join(' ')}`)
+  return new Error(`failed to write profile "${profile}": ${errorMessage(cause)}. ${parts.join(' ')}`)
 }
 
 /** Prefix of the staging directory a download writes through: never tracked, never listed. */
@@ -1487,10 +1880,24 @@ const STAGING_PREFIX = '.dsh-gist-settings-staging-'
  * A staging directory left behind by a killed process is inert: nothing tracks it,
  * `listProfiles` skips dot-directories, and the next run uses a fresh name.
  */
-async function commitTrackedFiles({ profile, dir, realDir, files, localFiles, backupDir }) {
+async function commitTrackedFiles({
+  profile,
+  dir,
+  realDir,
+  files,
+  localFiles,
+  backupDir,
+}: {
+  profile: string
+  dir: string
+  realDir: string
+  files: Record<string, string>
+  localFiles: Record<string, string>
+  backupDir: string | null
+}): Promise<string[]> {
   const staged = path.join(dir, `${STAGING_PREFIX}${process.pid}-${Date.now().toString(36)}`)
-  const plan = []
-  const identities = new Map()
+  const plan: PlannedFile[] = []
+  const identities = new Map<string, string>()
   for (const [name, content] of Object.entries(files)) {
     const target = await resolveTrackedFile(profile, name, { dir, realDir })
     // Refused before anything is staged: writing both would discard one revision
@@ -1518,7 +1925,9 @@ async function commitTrackedFiles({ profile, dir, realDir, files, localFiles, ba
     // Measure what landed: a short write that still reported success would
     // otherwise be discovered only after the profile had been overwritten.
     for (const item of plan) {
-      const { size } = await fs.stat(item.staged)
+      // Every entry was given a staged path by the loop above; the plan is filled in
+      // two steps, so the compiler cannot carry that from one loop into the next.
+      const { size } = await fs.stat(item.staged!)
       const expected = Buffer.byteLength(item.content, 'utf8')
       if (size !== expected) {
         throw new Error(`staged ${item.name} is ${size} bytes, expected ${expected}`)
@@ -1535,7 +1944,9 @@ async function commitTrackedFiles({ profile, dir, realDir, files, localFiles, ba
         // rename call itself, which is as close as `fs` gets — see the note in the
         // README.
         item.target = await resolveTrackedFile(profile, item.name, { dir, realDir })
-        await fs.rename(item.staged, item.target)
+        // Staged above, for the same reason as the measurement loop: the two phases
+        // of the plan are separate as far as the compiler is concerned.
+        await fs.rename(item.staged!, item.target)
       } catch (error) {
         throw await rollbackFiles({ profile, dir, realDir, done, localFiles, staged, backupDir, cause: error })
       }
@@ -1559,7 +1970,10 @@ async function commitTrackedFiles({ profile, dir, realDir, files, localFiles, ba
  * downloads that cannot change anything. `syncProfile` applies that second step
  * in the same call rather than leaving the profile half-converged.
  */
-export async function downloadProfile(profile, { ghPath, config = {}, force = false, signal } = {}) {
+export async function downloadProfile(
+  profile: string,
+  { ghPath, config = {}, force = false, signal }: DownloadOptions = {},
+): Promise<DownloadResult> {
   return withStateLock(async () => {
     const state = await loadState(config)
     assertNoCaseCollision(state, profile)
@@ -1569,7 +1983,8 @@ export async function downloadProfile(profile, { ghPath, config = {}, force = fa
     }
 
     const trackedNames = resolveProfileFiles(config)
-    const remote = await gistGet(ghPath, record.gistId, { signal, only: trackedNames })
+    // `ghPath` is optional in the options only because they default to `{}`.
+    const remote = await gistGet(ghPath!, record.gistId, { signal, only: trackedNames })
     const remoteFiles = Object.fromEntries(
       Object.entries(remote.files).filter(([name]) => trackedNames.includes(name)),
     )
@@ -1648,7 +2063,7 @@ export async function downloadProfile(profile, { ghPath, config = {}, force = fa
       // next status, so the report says so rather than implying data loss.
       throw new Error(
         `profile "${profile}" was restored from ${remote.url}, but recording the new baseline in ` +
-          `${statePath(config)} failed (${error.message}). The files are in place; gist_status repairs a ` +
+          `${statePath(config)} failed (${errorMessage(error)}). The files are in place; gist_status repairs a ` +
           'stale baseline once that directory is writable again.',
       )
     }
@@ -1669,9 +2084,12 @@ export async function downloadProfile(profile, { ghPath, config = {}, force = fa
  * file yourself and sync, or use `gist_upload` with `force: true` to drop a
  * locally-missing file from the gist.
  */
-export async function syncProfile(profile, { ghPath, config = {}, force = false, signal } = {}) {
+export async function syncProfile(
+  profile: string,
+  { ghPath, config = {}, force = false, signal }: DownloadOptions = {},
+): Promise<SyncResult> {
   const status = await profileStatus(profile, { ghPath, config, signal })
-  const settle = (action, result) => ({ profile, action, ...result })
+  const settle = <R extends object>(action: SyncAction, result: R) => ({ profile, action, ...result })
 
   switch (status.status) {
     case 'untracked':
@@ -1685,7 +2103,9 @@ export async function syncProfile(profile, { ghPath, config = {}, force = false,
       // The gist carries none of the tracked files. There is nothing to download,
       // and this machine's copies are now the only ones, so the conservative
       // policy points at republishing them rather than reporting a failure.
-      if (status.remoteFiles.length === 0) {
+      // `remote-ahead` is only ever reported after the gist has been read, so
+      // `remoteFiles` is present; the shared status shape makes it optional.
+      if (status.remoteFiles!.length === 0) {
         const republished = await uploadProfile(profile, { ghPath, config, signal })
         return settle('restored', { ...republished, republished: republished.uploadedFiles })
       }
@@ -1731,14 +2151,14 @@ export async function syncProfile(profile, { ghPath, config = {}, force = false,
   }
 }
 
-export async function syncAll({ ghPath, config = {}, force = false, signal } = {}) {
+export async function syncAll({ ghPath, config = {}, force = false, signal }: DownloadOptions = {}) {
   const profiles = await listKnownProfiles(config)
   const results = []
   for (const profile of profiles) {
     try {
       results.push({ ok: true, ...(await syncProfile(profile, { ghPath, config, force, signal })) })
     } catch (error) {
-      results.push({ ok: false, profile, error: error.message })
+      results.push({ ok: false, profile, error: errorMessage(error) })
     }
   }
   return results
@@ -1749,7 +2169,7 @@ export async function syncAll({ ghPath, config = {}, force = false, signal } = {
  * Paths are reported even when gh is missing, so the tool can still show what
  * it tracks instead of claiming every profile is untracked.
  */
-export async function health(config = {}) {
+export async function health(config: Config = {}): Promise<Health> {
   const paths = {
     dshHome: resolveDshHome(config),
     profilesDir: resolveProfilesDir(config),

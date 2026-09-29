@@ -15,7 +15,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import * as core from '../lib/core.js'
+import * as core from '../lib/core.ts'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const fakeGh = [process.execPath, path.join(here, 'fake-gh.mjs')]

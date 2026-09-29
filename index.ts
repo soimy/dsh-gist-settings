@@ -3,7 +3,7 @@
  *
  * Registers four agent tools that back a DeepSeek Harness profile's
  * configuration up to GitHub Gists (and restore it) through the locally
- * installed `gh` CLI. All real work lives in `./lib/core.js`, which has no
+ * installed `gh` CLI. All real work lives in `./lib/core.ts`, which has no
  * Cordis dependency and is covered by `test/sync.test.mjs`.
  *
  * Tool definitions are written as plain objects rather than built with
@@ -14,7 +14,141 @@
  * content blocks.
  */
 
-import * as core from './lib/core.js'
+import * as core from './lib/core.ts'
+import type { Config, GhPath, Health, ProfileStatus, ProfileStatusName } from './lib/core.ts'
+
+/* ------------------------------------------------------------- the types -- */
+
+/**
+ * This package imports nothing from the Harness installation, so the few framework
+ * shapes this file reaches are described structurally here instead of imported.
+ * Nothing in this block exists at runtime; core's own shapes are imported above.
+ */
+
+/**
+ * An untrusted value once it is known to be a mapping.
+ *
+ * `typeof` narrowing on `unknown` leaves `object | null`, which has no index
+ * signature, so this names the mapping the runtime checks establish. Every use is
+ * a read that happens after the check that proves it.
+ */
+type Mapping = Record<string, unknown>
+
+/** One tool's canonical value, before `output.render` projects it into content blocks. */
+interface ToolValue {
+  text: string
+}
+
+/**
+ * What the registry hands `execute`: for this plugin, the abort signal of the call.
+ *
+ * Optional, and read with `?.` everywhere, because the registry — not this file —
+ * decides what an execution carries.
+ */
+interface ToolExecution {
+  signal?: AbortSignal
+}
+
+/** One declared argument's JSON Schema node. */
+interface ArgumentSchemaNode {
+  type: 'string' | 'boolean'
+  description: string
+}
+
+/** The `parameters` object of a hand-written tool definition: raw JSON Schema. */
+type ToolParameters = {
+  type: 'object'
+  properties: Record<string, ArgumentSchemaNode>
+  additionalProperties: false
+}
+
+/**
+ * The `parameters` object that one tool's declared argument type compiles to.
+ *
+ * The mapping is what keeps a declaration and its JSON Schema in step: a property
+ * the schema omits, or a `type` that contradicts the declared argument, is a compile
+ * error rather than a mismatch the model only discovers by calling the tool.
+ */
+type ArgumentSchema<A> = {
+  type: 'object'
+  properties: {
+    [K in keyof A]-?: A[K] extends boolean | undefined
+      ? { type: 'boolean'; description: string }
+      : { type: 'string'; description: string }
+  }
+  additionalProperties: false
+}
+
+/** The argument types `checkArgs` produces: exactly what a JSON Schema here can declare. */
+type ToolArgs = Record<string, string | boolean | undefined>
+
+/** The arguments `gist_status` accepts. */
+type StatusArgs = { profile?: string }
+
+/** The arguments `gist_upload` accepts. */
+type UploadArgs = { profile?: string; description?: string; force?: boolean; verifyGh?: boolean }
+
+/** The arguments `gist_download` accepts. */
+type DownloadArgs = { profile?: string; force?: boolean }
+
+/** The arguments `gist_sync` accepts. */
+type SyncArgs = { profile?: string; force?: boolean }
+
+/** One tool definition as this file writes it, before `contentTool` completes it. */
+interface ToolSpec<A extends ToolArgs> {
+  name: string
+  description: string
+  parameters: ArgumentSchema<A>
+  run(args: A, exec: ToolExecution | undefined): Promise<ToolValue>
+  concurrencySafe?: boolean
+}
+
+/**
+ * One completed tool definition, in the shape `ctx.tools.register` accepts.
+ *
+ * `parameters` is the loose JSON Schema shape here: each tool's literal is checked
+ * against its own `ToolSpec` where it is written, and `register` receives the result.
+ */
+interface ToolDefinition {
+  name: string
+  description: string
+  parameters: ToolParameters
+  output: {
+    schema: {
+      type: 'object'
+      properties: { text: { type: 'string' } }
+      additionalProperties: false
+    }
+    render(args: unknown, value: ToolValue): Array<{ type: 'text'; text: string }>
+  }
+  isConcurrencySafe?: (args: unknown) => boolean
+  execute(args: unknown, exec: ToolExecution | undefined): Promise<ToolValue>
+}
+
+/** Undo one registration; the effect body yields it so that unloading can call it. */
+type Disposer = () => void
+
+/** The slice of the plugin's Cordis context that this file uses. */
+interface PluginContext {
+  tools: {
+    /** Register one tool for as long as this plugin row stays mounted. */
+    register(tool: ToolDefinition): Disposer
+  }
+  /** Run a setup body and keep whatever it yields as this row's teardown. */
+  effect(body: () => Generator<Disposer, void, unknown>, label: string): void
+}
+
+/**
+ * One row of the status report: an engine row, plus the local row this file builds
+ * when gh is unavailable and the remote state could not be read at all.
+ *
+ * Derived from core's `ProfileStatus` rather than restated, because that is where
+ * the fields come from; the local row merely carries fewer of them.
+ */
+type StatusRow = Omit<Partial<ProfileStatus>, 'profile' | 'status'> & {
+  profile: string
+  status: ProfileStatusName | 'unknown'
+}
 
 /** Registering tools is the only service this plugin needs. */
 export const inject = ['tools']
@@ -29,13 +163,13 @@ const KNOWN_CONFIG_KEYS = ['ghPath', 'dshHome', 'profilesDir', 'stateDir', 'prof
  * than a silent fall back to defaults — which matters most for `profileFiles`,
  * where a mistake would quietly change which files get backed up.
  */
-function readConfig(raw) {
+function readConfig(raw: unknown): Config {
   const input = raw === undefined || raw === null ? {} : raw
   if (typeof input !== 'object' || Array.isArray(input)) {
     throw new Error(`config must be a mapping, received ${Array.isArray(input) ? 'an array' : typeof input}`)
   }
 
-  const unknown = Object.keys(input).filter((key) => !KNOWN_CONFIG_KEYS.includes(key))
+  const unknown = Object.keys(input as Mapping).filter((key) => !KNOWN_CONFIG_KEYS.includes(key))
   if (unknown.length > 0) {
     throw new Error(
       `unknown config key${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}; ` +
@@ -43,8 +177,8 @@ function readConfig(raw) {
     )
   }
 
-  const str = (key) => {
-    const value = input[key]
+  const str = (key: string): string | undefined => {
+    const value = (input as Mapping)[key]
     if (value === undefined) return undefined
     if (typeof value !== 'string' || value.trim() === '') {
       throw new Error(`config.${key} must be a non-empty string`)
@@ -52,13 +186,13 @@ function readConfig(raw) {
     return value.trim()
   }
 
-  const stringList = (key) => {
-    const value = input[key]
+  const stringList = (key: string): string[] | undefined => {
+    const value = (input as Mapping)[key]
     if (value === undefined) return undefined
     if (!Array.isArray(value) || value.length === 0) {
       throw new Error(`config.${key} must be a non-empty array of strings`)
     }
-    const parts = value.map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+    const parts = value.map((entry: unknown) => (typeof entry === 'string' ? entry.trim() : ''))
     if (parts.some((entry) => entry === '')) {
       throw new Error(`config.${key} must contain only non-empty strings`)
     }
@@ -70,9 +204,9 @@ function readConfig(raw) {
    * reaching gh through a wrapper — `['wsl', 'gh']`, a shim script, a portable
    * build invoked by its interpreter.
    */
-  let ghPath
-  if (input.ghPath !== undefined) {
-    ghPath = Array.isArray(input.ghPath) ? stringList('ghPath') : str('ghPath')
+  let ghPath: GhPath | undefined
+  if ((input as Mapping).ghPath !== undefined) {
+    ghPath = Array.isArray((input as Mapping).ghPath) ? stringList('ghPath') : str('ghPath')
   }
 
   const profileFiles = stringList('profileFiles')
@@ -91,7 +225,7 @@ function readConfig(raw) {
 }
 
 /** Resolve `gh` and refuse to continue unless it is installed and authenticated. */
-async function requireGh(config) {
+async function requireGh(config: Config): Promise<GhPath> {
   const resolved = await core.resolveGh(config)
   if (!resolved.path) {
     throw new Error(
@@ -112,10 +246,10 @@ async function requireGh(config) {
 /**
  * Guard a profile name before it reaches the filesystem.
  * Mirrors the framework's own profile-name rules, which also reserve the shared
- * `node_modules` store, and `lib/core.js` re-checks containment against real
+ * `node_modules` store, and `lib/core.ts` re-checks containment against real
  * paths so a junction cannot redirect the read or the write.
  */
-function assertProfileName(name) {
+function assertProfileName(name: unknown): string {
   if (
     typeof name !== 'string' ||
     !/^[A-Za-z0-9._-]+$/.test(name) ||
@@ -140,7 +274,7 @@ function assertProfileName(name) {
  * A name that matches nothing is also refused, listing what does exist, rather
  * than failing later with a confusing "has none of the tracked files".
  */
-async function resolveProfileArg(name, config) {
+async function resolveProfileArg(name: unknown, config: Config): Promise<string> {
   const wanted = assertProfileName(name)
   const known = await core.listProfiles(config)
   const state = await core.loadState(config)
@@ -176,7 +310,7 @@ async function resolveProfileArg(name, config) {
 
 /* ------------------------------------------------------------- formatting -- */
 
-const STATUS_LABEL = {
+const STATUS_LABEL: Record<ProfileStatusName | 'unknown', string> = {
   'untracked': 'not tracked',
   'in-sync': 'in sync',
   'local-ahead': 'local changes to upload',
@@ -193,14 +327,14 @@ const STATUS_LABEL = {
  * When gh could not be found there is no auth state to report, and advising
  * `gh auth login` sends the reader down the wrong path entirely.
  */
-function describeAuth(health) {
+function describeAuth(health: Health): string {
   if (!health.gh.found) return 'not checked - gh is not installed'
   if (!health.auth?.authenticated) return 'NOT AUTHENTICATED - run `gh auth login`'
   return `ok (${health.auth.account})`
 }
 
-function formatStatusReport(health, rows, statePath) {
-  const lines = []
+function formatStatusReport(health: Health, rows: StatusRow[], statePath: string): string {
+  const lines: string[] = []
   if (health.gh.found) {
     lines.push(`gh:   ${health.gh.version}`)
     lines.push(`      ${health.gh.path}`)
@@ -241,7 +375,7 @@ function formatStatusReport(health, rows, statePath) {
  * Values are checked, never coerced: a wrong type or an explicit `null` is an
  * error the model can correct, not something to guess at.
  */
-function checkArgs(toolName, parameters, args) {
+function checkArgs<A extends ToolArgs>(toolName: string, parameters: ToolParameters, args: unknown): A {
   const input = args === undefined || args === null ? {} : args
   if (typeof input !== 'object' || Array.isArray(input)) {
     throw new Error(
@@ -252,13 +386,13 @@ function checkArgs(toolName, parameters, args) {
   const properties = parameters.properties ?? {}
   const problems = []
 
-  for (const key of Object.keys(input)) {
+  for (const key of Object.keys(input as Mapping)) {
     if (!Object.hasOwn(properties, key)) problems.push(`unknown argument "${key}"`)
   }
 
-  const accepted = {}
+  const accepted: Record<string, string | boolean> = {}
   for (const [key, schema] of Object.entries(properties)) {
-    const value = input[key]
+    const value = (input as Mapping)[key]
     if (value === undefined) continue
     if (schema.type === 'string') {
       if (typeof value !== 'string') problems.push(`"${key}" must be a string, received ${JSON.stringify(value)}`)
@@ -273,7 +407,10 @@ function checkArgs(toolName, parameters, args) {
   }
 
   if (problems.length > 0) throw new Error(`invalid arguments for ${toolName}: ${problems.join('; ')}`)
-  return accepted
+  // Every value above was checked against the type its own schema declares; the
+  // assertion only names that result for the caller, which the compiler cannot
+  // correlate with a `parameters` object it sees as data.
+  return accepted as A
 }
 
 /**
@@ -284,7 +421,7 @@ function checkArgs(toolName, parameters, args) {
  * mode projects into a generated SDK, so an untyped array would hand the model
  * `list[Any]` instead of a described result.
  */
-function contentTool({ name, description, parameters, run, concurrencySafe = false }) {
+function contentTool<A extends ToolArgs>({ name, description, parameters, run, concurrencySafe = false }: ToolSpec<A>): ToolDefinition {
   return {
     name,
     description,
@@ -301,20 +438,20 @@ function contentTool({ name, description, parameters, run, concurrencySafe = fal
     // read-only status tool may join a parallel batch.
     ...(concurrencySafe ? { isConcurrencySafe: () => true } : {}),
     async execute(args, exec) {
-      return await run(checkArgs(name, parameters, args), exec)
+      return await run(checkArgs<A>(name, parameters, args), exec)
     },
   }
 }
 
 /** The canonical value every tool returns; `output.render` turns it into content. */
-const text = (body) => ({ text: body })
+const text = (body: string): ToolValue => ({ text: body })
 
 /* ----------------------------------------------------------------- tools -- */
 
-function buildTools(ctx, userConfig) {
-  const withConfig = (config) => ({ ...userConfig, ...config })
+function buildTools(ctx: PluginContext, userConfig: Config): ToolDefinition[] {
+  const withConfig = (config?: Config): Config => ({ ...userConfig, ...config })
 
-  const statusTool = contentTool({
+  const statusTool = contentTool<StatusArgs>({
     name: 'gist_status',
     concurrencySafe: true,
     description:
@@ -340,7 +477,7 @@ function buildTools(ctx, userConfig) {
       const state = await core.loadState(config)
       const names = profile ? [await resolveProfileArg(profile, config)] : await core.listKnownProfiles(config)
       const online = h.gh.found && h.auth?.authenticated === true
-      const rows = []
+      const rows: StatusRow[] = []
       for (const name of names) {
         if (!online) {
           // Without a usable gh the gist cannot be read, but what this machine
@@ -366,7 +503,7 @@ function buildTools(ctx, userConfig) {
     },
   })
 
-  const uploadTool = contentTool({
+  const uploadTool = contentTool<UploadArgs>({
     name: 'gist_upload',
     description:
       'Upload local DeepSeek Harness profile configuration to GitHub Gists (the "sync out" direction). ' +
@@ -417,12 +554,12 @@ function buildTools(ctx, userConfig) {
       // profile is simply not selected, and reporting those as "no directory on this
       // machine" would be false.
       const names = profile ? [await resolveProfileArg(profile, config)] : await core.listProfiles(config)
-      const skipped = profile
+      const skipped: string[] = profile
         ? []
         : (await core.listKnownProfiles(config)).filter((name) => !names.includes(name))
       if (names.length === 0 && skipped.length === 0) return text('No profiles found; nothing to upload.')
 
-      const lines = []
+      const lines: string[] = []
       for (const name of names) {
         try {
           const result = await core.uploadProfile(name, { ghPath, config, description, force, signal })
@@ -442,7 +579,7 @@ function buildTools(ctx, userConfig) {
           if (result.missing.length) parts.push(`  absent locally: ${result.missing.join(', ')}`)
           lines.push(parts.join('\n'))
         } catch (error) {
-          lines.push(`${name}: FAILED - ${error.message}`)
+          lines.push(`${name}: FAILED - ${(error as Error).message}`)
         }
       }
       if (skipped.length > 0) {
@@ -455,7 +592,7 @@ function buildTools(ctx, userConfig) {
     },
   })
 
-  const downloadTool = contentTool({
+  const downloadTool = contentTool<DownloadArgs>({
     name: 'gist_download',
     description:
       'Download GitHub Gist configuration over the local DeepSeek Harness profile files (the "sync in" ' +
@@ -494,7 +631,7 @@ function buildTools(ctx, userConfig) {
         return text('Nothing to download: no profile has a gist yet. Run gist_upload first.')
       }
 
-      const lines = []
+      const lines: string[] = []
       for (const name of tracked) {
         try {
           const result = await core.downloadProfile(name, { ghPath, config, force, signal })
@@ -505,14 +642,14 @@ function buildTools(ctx, userConfig) {
           if (result.backupDir) parts.push(`  previous files backed up to: ${result.backupDir}`)
           lines.push(parts.join('\n'))
         } catch (error) {
-          lines.push(`${name}: FAILED - ${error.message}`)
+          lines.push(`${name}: FAILED - ${(error as Error).message}`)
         }
       }
       return text(lines.join('\n\n'))
     },
   })
 
-  const syncTool = contentTool({
+  const syncTool = contentTool<SyncArgs>({
     name: 'gist_sync',
     description:
       'Synchronise local DeepSeek Harness profile configuration with GitHub Gists in one step. ' +
@@ -547,7 +684,7 @@ function buildTools(ctx, userConfig) {
       const names = profile ? [await resolveProfileArg(profile, config)] : await core.listKnownProfiles(config)
       if (names.length === 0) return text('No profiles found; nothing to sync.')
 
-      const lines = []
+      const lines: string[] = []
       for (const name of names) {
         try {
           const result = await core.syncProfile(name, { ghPath, config, force, signal })
@@ -582,7 +719,7 @@ function buildTools(ctx, userConfig) {
           }
           lines.push(`${name}: ${detail}`)
         } catch (error) {
-          lines.push(`${name}: FAILED - ${error.message}`)
+          lines.push(`${name}: FAILED - ${(error as Error).message}`)
         }
       }
       return text(lines.join('\n'))
@@ -596,7 +733,7 @@ function buildTools(ctx, userConfig) {
  * @param ctx - the plugin's Cordis context; `ctx.tools` comes from `inject`.
  * @param config - this row's `config:` block from the profile patch.
  */
-export function apply(ctx, config) {
+export function apply(ctx: PluginContext, config: unknown): void {
   const userConfig = readConfig(config)
   ctx.effect(function* registerGistTools() {
     for (const tool of buildTools(ctx, userConfig)) {

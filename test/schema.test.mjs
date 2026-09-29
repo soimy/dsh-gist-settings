@@ -29,7 +29,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { apply } from '../index.js'
+import { apply } from '../index.ts'
 
 /** Candidate locations for the installed `@deepseek-ai/dsh-tools` package. */
 function findDshTools() {

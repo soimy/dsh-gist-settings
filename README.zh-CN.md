@@ -13,7 +13,7 @@
 
 | 部分 | 状态 |
 |---|---|
-| 同步引擎（`lib/core.js`） | 已完成 |
+| 同步引擎（`lib/core.ts`） | 已完成 |
 | Host 插件 + 4 个 agent 工具 | **已安装并生效**，可在会话中调用 |
 | 真实 GitHub 往返 | **已在真实账号上验证** |
 | 测试 | **七套共 180 项离线用例，另有 12 项真实用例**，全部通过 |
@@ -56,6 +56,10 @@ plugin_manager  action: install_bundle  target: <此目录的绝对路径>
 
 该操作会把此目录链接进 profile、把 bundle 加入 `dsh.profile.bundles`，并应用 `cordis.patch.yml`
 中的补丁。之后需要重启，才能加载新的模块代际。
+
+由于 Harness 加载的是 `dist/`，把工作副本安装成 bundle 之前要先构建：
+`npm install --include=dev && npm run build`。`dist/` 是生成产物且从不提交，所以刚克隆出来的目录里
+没有它（见[开发](#开发)）。
 
 **不要**手工往 profile 里添加 bundle 行或依赖 —— 那是 `install_bundle` 的职责。但该行的
 `config:` 配置块是留给你编辑的（见[配置](#配置)）。
@@ -228,8 +232,11 @@ URL 输出到结果里，进而进入对话记录。请据此对待这些链接�
 ## 仓库结构
 
 ```
-index.js               Host 插件：注册四个 agent 工具
-lib/core.js            同步引擎 —— 不依赖 Cordis，可独立测试
+index.ts               Host 插件：注册四个 agent 工具
+lib/core.ts            同步引擎 —— 不依赖 Cordis，可独立测试
+tsconfig.json          把 index.ts 与 lib/ 编译进 dist/ —— 即 Harness 加载的那一半
+tsconfig.check.json    对运行时、测试与脚本做类型检查，不产出文件
+dist/                  `npm run build` 的产物；不手工编辑，也不提交
 cordis.patch.yml       bundle 补丁（插入插件行；并记录配置说明）
 client.js              Client 设置页（尚未编写）
 locale/{en,zh}.json    Plugin Manager 卡片用的展示元数据
@@ -250,8 +257,18 @@ scripts/               check-changelog.mjs —— 校验 CHANGELOG.md
 
 ## 开发
 
+一次性安装用 `npm install --include=dev` 装好固定版本的构建工具链：`typescript` 与 `@types/node`，
+两者都是精确锁定的 devDependencies。这个参数是承重的而不是装饰：只要 `NODE_ENV=production`，npm
+就会跳过 devDependencies，而那次安装会以退出码 0 结束、什么都没装 —— 这看起来像成功，直到 `tsc`
+找不到为止。插件仍然没有**运行时**依赖：除 `node:` 外不 import 任何东西，也不自带任何依赖，因此
+编译器只是开发工具。
+
 ```bash
-npm test                # 七套离线用例（180 项），外加 CHANGELOG 与文档链接检查
+npm run build           # tsc -p tsconfig.json → dist/，即 Harness 加载的 JavaScript
+npm run build:watch     # 同上，持续监听 —— 开发时让它一直跑着
+npm run typecheck       # tsc -p tsconfig.check.json：检查整个仓库，不产出文件
+npm test                # 先构建（pretest），再跑八套离线用例（186 项）与 CHANGELOG、文档链接检查
+npm run test:entry      # profile 实际加载的 package export：构建产物，以及它注册的四个工具
 npm run test:sync       # 用假 gh 跑引擎完整生命周期
 npm run test:tools      # 工具层、参数校验、故障隔离
 npm run test:schema     # 定义 vs. Harness 自带校验器
@@ -260,6 +277,14 @@ npm run test:safety     # 目录包容、原子写入、强制删除、灾难恢
 npm run changelog:check # 校验 CHANGELOG.md 结构与版本一致性
 npm run test:live       # 需显式开启：真实 GitHub
 ```
+
+`index.ts` 与 `lib/core.ts` 是源码，而 Harness 从不加载它们。profile 是通过**它自己 `node_modules`
+里的 junction** 抵达这个包的，而 Node 拒绝对任何解析到 `node_modules` 下的文件做类型擦除 —— 它会抛
+`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING` —— 因此这个包无法"直接跑 TypeScript"。`npm run build`
+改为产出 `dist/index.js`、`dist/lib/core.js` 以及配套的 `.d.ts`，而 `package.json` 的 `exports["."]`
+指向 `./dist/index.js`；`dist/` 是重新生成的产物，不手工编辑，也不提交。各套件与 `scripts/` 仍是普通
+ESM `.mjs`，直接 import 那些 `.ts` 源码 —— 成立的原因正好相反：Node **会**对 `node_modules` 之外的
+文件做类型擦除 —— 所以单套件仍然可以 `node test/sync.test.mjs` 这样跑。
 
 `test/fake-gh.mjs` 是 `gh` 的内存替身，实现了 `--version`、`auth status` 和 `/gists` 接口，并可选
 注入"截断文件""不可信的 `raw_url` 主机""HTTP 500""未登录的 CLI"。`sync`、`tools`、`regression`、
@@ -284,8 +309,9 @@ $env:DSH_GIST_LIVE_TEST='1'; npm run test:live     # PowerShell
 DSH_GIST_LIVE_TEST=1 npm run test:live             # bash
 ```
 
-由于 `install_bundle` 会把此目录链接进 profile，**工作副本就是线上插件**：改 `index.js` 和 `lib/`
-重载后即生效。
+由于 `install_bundle` 会把此目录链接进 profile，**工作副本就是线上插件** —— 但 Harness 加载的是
+`dist/`，所以对 `index.ts` 或 `lib/core.ts` 的改动要等重新构建之后才会到达它。开发时请一直开着
+`npm run build:watch`；重载时拿到的就是那一刻 `dist/` 里的内容。
 
 ## 设置页
 

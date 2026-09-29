@@ -26,7 +26,11 @@ runs:
       run: |
         version="$(node -p "require('./package.json').peerDependencies['@deepseek-ai/dsh']")"
         echo "installing @deepseek-ai/dsh@$version on Node $(node --version)"
-        npm install --no-save --no-audit --no-fund "@deepseek-ai/dsh@$version"
+        # `--include=dev` is load-bearing: npm omits devDependencies whenever
+        # `NODE_ENV=production`, and this install then succeeds having installed only
+        # the Harness. The release job runs `npm test`, whose `pretest` step needs the
+        # pinned TypeScript to build `dist/`, so the toolchain comes along here.
+        npm install --no-save --no-audit --no-fund --include=dev "@deepseek-ai/dsh@$version"
 
         # Where the tools landed is not ours to assume: npm's placement depends on its
         # version and on what else is installed. Resolving from the Harness's own
@@ -34,7 +38,7 @@ runs:
         tools="$(node -e "
           const { createRequire } = require('node:module');
           const path = require('node:path');
-          const fromRepo = createRequire(path.join(process.cwd(), 'index.js'));
+          const fromRepo = createRequire(path.join(process.cwd(), 'package.json'));
           const dsh = fromRepo.resolve('@deepseek-ai/dsh/package.json');
           const fromDsh = createRequire(dsh);
           console.log(path.dirname(fromDsh.resolve('@deepseek-ai/dsh-tools/package.json')));

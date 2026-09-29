@@ -1,0 +1,32 @@
+{
+  // Compiles the half the Harness loads. `exports["."]` points at ./dist/index.js
+  // because Node refuses to strip types for any file resolved under node_modules —
+  // and a profile reaches this package through a junction inside its own
+  // node_modules. Everything else in the repository is executed from source.
+  //
+  // `rewriteRelativeImportExtensions` is what lets the source name real files
+  // (`./lib/core.ts`) while the emitted JavaScript names what actually sits next
+  // to it (`./lib/core.js`).
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["es2023"],
+    "types": ["node"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "rootDir": ".",
+    "outDir": "dist",
+    "declaration": true,
+    "sourceMap": false,
+    "rewriteRelativeImportExtensions": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true
+  },
+  "include": ["index.ts", "lib/**/*.ts"]
+}
