@@ -5,8 +5,8 @@
  * Unlike the other suites, this one is opt-in because it creates a real secret
  * gist on the authenticated account:
  *
- *   bash:        DSH_GIST_LIVE_TEST=1 node test/live.test.mjs
- *   PowerShell:  $env:DSH_GIST_LIVE_TEST='1'; node test/live.test.mjs
+ *   bash:        DSH_GIST_LIVE_TEST=1 node test/live.test.ts
+ *   PowerShell:  $env:DSH_GIST_LIVE_TEST='1'; node test/live.test.ts
  *
  * It works entirely inside a throwaway DSH_HOME under the OS temp directory, so
  * no real profile is read or written, and it deletes the gist it created even
@@ -36,8 +36,8 @@ const config = { dshHome: root }
 const profileDir = path.join(root, 'profiles', 'verify')
 
 await fs.mkdir(profileDir, { recursive: true })
-const write = (name, text) => fs.writeFile(path.join(profileDir, name), text, 'utf8')
-const read = (name) => fs.readFile(path.join(profileDir, name), 'utf8')
+const write = (name: string, text: string) => fs.writeFile(path.join(profileDir, name), text, 'utf8')
+const read = (name: string) => fs.readFile(path.join(profileDir, name), 'utf8')
 await write('cordis.patch.yml', '- id: verify\nvalue: 1\n')
 await write('package.json', '{\n  "name": "verify"\n}\n')
 
@@ -50,9 +50,23 @@ console.log(`\ndsh-gist-settings live suite\n  gh:      ${resolved.version}`)
 console.log(`  account: ${auth.account}`)
 console.log(`  fixture: ${root}\n`)
 
-const results = []
-let gistId = null
-let bigGistId = null
+const results: boolean[] = []
+// Both ids stay `null` until the case that creates the gist assigns one; every read
+// below sits in a later case, which is what the `!` at those reads records.
+let gistId: string | null = null
+let bigGistId: string | null = null
+
+/** The fields this suite reads from a `core.gistGet` result. */
+interface GistSnapshot {
+  url: string
+  files: Record<string, string>
+  truncated: string[]
+}
+
+/** The one field this suite reads from the raw `gh api` response the nested-name probe gets back. */
+interface AcceptedGist {
+  id: string
+}
 
 /**
  * Read the gist until `predicate` holds.
@@ -61,17 +75,22 @@ let bigGistId = null
  * single read makes this suite flaky for reasons that have nothing to do with
  * the plugin. Observed once in three runs before this retry was added.
  */
-async function readGistUntil(predicate, { attempts = 12, delayMs = 500 } = {}) {
-  let gist
+async function readGistUntil(
+  predicate: (gist: GistSnapshot) => boolean,
+  { attempts = 12, delayMs = 500 }: { attempts?: number; delayMs?: number } = {},
+): Promise<GistSnapshot> {
+  let gist: GistSnapshot | undefined
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    gist = await core.gistGet(ghPath, gistId)
+    gist = await core.gistGet(ghPath, gistId!)
     if (predicate(gist)) return gist
     await new Promise((resolve) => setTimeout(resolve, delayMs))
   }
-  return gist
+  // `attempts` defaults to 12 and no case overrides it, so the loop has always read
+  // the gist; the assertion is erased and the last read is what the case then checks.
+  return gist!
 }
 
-async function check(name, fn) {
+async function check(name: string, fn: () => Promise<void>) {
   try {
     await fn()
     results.push(true)
@@ -79,7 +98,10 @@ async function check(name, fn) {
   } catch (error) {
     results.push(false)
     console.log(`  \u001b[31mFAIL\u001b[0m  ${name}`)
-    console.log(`        ${error.message.split('\n').join('\n        ')}`)
+    // A `catch` binding is `unknown`; every failure here is an `Error` (`assert` and the
+    // runtime both throw them), so this cast names what is already true, and is erased.
+    const failure = error as Error
+    console.log(`        ${failure.message.split('\n').join('\n        ')}`)
   }
 }
 
@@ -93,14 +115,14 @@ try {
   })
 
   await check('the real gist is secret and holds both files', async () => {
-    const gist = await core.gistGet(ghPath, gistId)
+    const gist = await core.gistGet(ghPath, gistId!)
     assert.deepEqual(Object.keys(gist.files).sort(), ['cordis.patch.yml', 'package.json'])
     const listed = await core.ghRun(ghPath, ['api', `/gists/${gistId}`, '--jq', '.public'])
     assert.equal(listed.stdout.trim(), 'false', 'gist must be secret')
   })
 
   await check('a real round trip preserves content byte for byte', async () => {
-    const gist = await core.gistGet(ghPath, gistId)
+    const gist = await core.gistGet(ghPath, gistId!)
     assert.equal(gist.files['cordis.patch.yml'], await read('cordis.patch.yml'))
     assert.equal(gist.files['package.json'], await read('package.json'))
   })
@@ -120,7 +142,7 @@ try {
   })
 
   await check('a PATCH with a null file value really deletes the remote file', async () => {
-    await core.gistPatch(ghPath, gistId, { files: { 'stale.yml': 'temporary\n' } })
+    await core.gistPatch(ghPath, gistId!, { files: { 'stale.yml': 'temporary\n' } })
     const withStale = await readGistUntil((g) => 'stale.yml' in g.files)
     assert.ok('stale.yml' in withStale.files, 'setup failed: stale.yml was not added')
 
@@ -141,7 +163,7 @@ try {
 
   await check('a real divergence is detected and an unforced sync refuses', async () => {
     await write('cordis.patch.yml', 'LOCAL WINS?\n')
-    await core.gistPatch(ghPath, gistId, { files: { 'cordis.patch.yml': 'REMOTE WINS?\n' } })
+    await core.gistPatch(ghPath, gistId!, { files: { 'cordis.patch.yml': 'REMOTE WINS?\n' } })
     const status = await core.profileStatus('verify', { ghPath, config })
     assert.equal(status.status, 'diverged')
     await assert.rejects(() => core.syncProfile('verify', { ghPath, config }), /diverged/)
@@ -155,7 +177,7 @@ try {
   })
 
   await check('a following sync is a no-op', async () => {
-    const gist = await core.gistGet(ghPath, gistId)
+    const gist = await core.gistGet(ghPath, gistId!)
     const result = await core.syncProfile('verify', { ghPath, config })
     assert.equal(result.action, 'noop')
     assert.equal(result.gistUrl, gist.url)
@@ -206,18 +228,25 @@ try {
     )
     if (result.code === 0) {
       // Do not leave a surprise gist behind if the API has changed its mind.
-      await core.gistDelete(ghPath, JSON.parse(result.stdout).id)
+      const accepted: AcceptedGist = JSON.parse(result.stdout)
+      await core.gistDelete(ghPath, accepted.id)
       assert.fail('the API accepted a nested filename; nested tracked names could be reconsidered')
     }
     assert.match(`${result.stdout}${result.stderr}`, /422|Validation Failed/)
   })
 } finally {
-  for (const id of [gistId, bigGistId].filter(Boolean)) {
+  // Annotated rather than inferred: both ids are assigned inside a case, so the flow
+  // type here is still the `null` each one started as.
+  const ids: (string | null)[] = [gistId, bigGistId]
+  for (const id of ids.filter((value): value is string => Boolean(value))) {
     try {
       await core.gistDelete(ghPath, id)
       console.log(`\n  cleaned up gist ${id}`)
     } catch (error) {
-      console.log(`\n  WARNING: could not delete gist ${id}: ${error.message}`)
+      // A `catch` binding is `unknown`; every failure here is an `Error` (`assert` and the
+      // runtime both throw them), so this cast names what is already true, and is erased.
+      const failure = error as Error
+      console.log(`\n  WARNING: could not delete gist ${id}: ${failure.message}`)
     }
   }
   await fs.rm(root, { recursive: true, force: true })

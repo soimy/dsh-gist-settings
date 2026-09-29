@@ -6,7 +6,7 @@ description: >
 
   Shared by the CI `schema` job and the release job on purpose: the release job used
   to run `npm test` with no Harness at all, which meant a tag push would have died
-  in `test/schema.test.mjs` before it published anything. Two jobs that both need a
+  in `test/schema.test.ts` before it published anything. Two jobs that both need a
   Harness should not each have their own way of getting one.
 
   The version comes from `package.json`, so the contract and the declared target

@@ -21,7 +21,7 @@
  * block or an inline code span, where a link-shaped string is an example rather
  * than a link.
  *
- * Run with: node scripts/check-docs.mjs  (also part of `npm test`)
+ * Run with: node scripts/check-docs.ts  (also part of `npm test`)
  */
 
 import fs from 'node:fs'
@@ -33,12 +33,12 @@ const root = fileURLToPath(new URL('..', import.meta.url))
 /** Directories that are not part of the documentation tree. */
 const SKIP_DIRS = new Set(['.git', 'node_modules', '.worktrees'])
 
-const problems = []
-const fail = (message) => problems.push(message)
+const problems: string[] = []
+const fail = (message: string) => problems.push(message)
 
 /* --------------------------------------------------------------- discovery -- */
 
-function walk(dir, found = []) {
+function walk(dir: string, found: string[] = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (entry.isDirectory()) {
       if (!SKIP_DIRS.has(entry.name)) walk(path.join(dir, entry.name), found)
@@ -61,7 +61,7 @@ const ESCAPABLE = /\\([!-/:-@[-`{-~])/g
  * looking somewhere else entirely. The fragment separator is found before
  * unescaping, so that an escaped `\#` stays part of the name.
  */
-function destinationPath(raw) {
+function destinationPath(raw: string) {
   for (let index = 0; index < raw.length; index += 1) {
     if (raw[index] === '\\') {
       index += 1
@@ -87,7 +87,7 @@ function destinationPath(raw) {
  * both count. Code is removed first so that a document may show link syntax as an
  * example without the checker treating it as a link.
  */
-function linksIn(text) {
+function linksIn(text: string) {
   const stripped = text
     .replace(/^```[\s\S]*?^```/gm, '')
     .replace(/^~~~[\s\S]*?^~~~/gm, '')
@@ -178,7 +178,9 @@ for (const file of files) {
 
 const PAIR = ['README.md', 'README.zh-CN.md']
 for (const from of PAIR) {
-  const to = PAIR.find((name) => name !== from)
+  // `PAIR` holds two different names, so the partner of either one always exists; `!` states
+  // that and is erased.
+  const to = PAIR.find((name) => name !== from)!
   const source = path.join(root, from)
   if (!fs.existsSync(source)) {
     fail(`${from} is missing; both READMEs are required`)

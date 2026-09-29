@@ -2,7 +2,7 @@
 /**
  * Exercise the release-notes script, which is a release critical path.
  *
- * `scripts/release-notes.mjs` decides what a published GitHub release says, and it
+ * `scripts/release-notes.ts` decides what a published GitHub release says, and it
  * is the one script here that normally runs for the first time on a tag push — the
  * worst moment to discover it refuses a good tag, or accepts a bad one. So the
  * success path and every way it is meant to refuse are checked on every push
@@ -11,7 +11,7 @@
  * Each case builds its own miniature package in a temporary directory: a
  * `package.json` and a `CHANGELOG.md`, because the script reads both.
  *
- * Run with: node test/release.test.mjs  (also part of `npm test`)
+ * Run with: node test/release.test.ts  (also part of `npm test`)
  */
 
 import assert from 'node:assert/strict'
@@ -24,8 +24,19 @@ import { promisify } from 'node:util'
 
 const run = promisify(execFile)
 const here = path.dirname(fileURLToPath(import.meta.url))
-const script = path.join(here, '..', 'scripts', 'release-notes.mjs')
+const script = path.join(here, '..', 'scripts', 'release-notes.ts')
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-gist-release-'))
+
+interface ReleaseOptions {
+  version?: string
+  changelog: string
+}
+
+interface ExecFailure {
+  code?: number | string | null
+  stdout?: string
+  stderr?: string
+}
 
 /**
  * Run the script against a synthetic package and report everything it did.
@@ -34,22 +45,24 @@ const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-gist-release-'))
  * stdout into `notes.md`, so a refusal has to leave it empty or a failed run would
  * publish the error text as the release notes.
  */
-async function release(tag, { version = '1.0.0', changelog }) {
+async function release(tag: string, { version = '1.0.0', changelog }: ReleaseOptions) {
   const dir = await fs.mkdtemp(path.join(root, 'case-'))
   await fs.writeFile(path.join(dir, 'package.json'), `${JSON.stringify({ name: 'x', version }, null, 2)}\n`)
   await fs.writeFile(path.join(dir, 'CHANGELOG.md'), changelog)
   const target = path.join(dir, 'scripts')
   await fs.mkdir(target, { recursive: true })
-  await fs.copyFile(script, path.join(target, 'release-notes.mjs'))
+  await fs.copyFile(script, path.join(target, 'release-notes.ts'))
   try {
-    const { stdout, stderr } = await run(process.execPath, ['scripts/release-notes.mjs', tag], { cwd: dir })
+    const { stdout, stderr } = await run(process.execPath, ['scripts/release-notes.ts', tag], { cwd: dir })
     return { code: 0, stdout, stderr }
   } catch (error) {
-    return { code: error.code ?? 1, stdout: error.stdout ?? '', stderr: error.stderr ?? '' }
+    // `run` rejects with the failure object `execFile` builds for the child process.
+    const failure = error as ExecFailure
+    return { code: failure.code ?? 1, stdout: failure.stdout ?? '', stderr: failure.stderr ?? '' }
   }
 }
 
-const WITH_LINKS = (sectionBody) => `# Changelog
+const WITH_LINKS = (sectionBody: string) => `# Changelog
 
 ## [Unreleased]
 
@@ -63,8 +76,8 @@ ${sectionBody}
 
 /* ------------------------------------------------------------- mini runner -- */
 
-const results = []
-async function check(name, fn) {
+const results: boolean[] = []
+async function check(name: string, fn: () => Promise<void>) {
   try {
     await fn()
     results.push(true)
@@ -72,7 +85,10 @@ async function check(name, fn) {
   } catch (error) {
     results.push(false)
     console.log(`  \u001b[31mFAIL\u001b[0m  ${name}`)
-    console.log(`        ${error.message.split('\n').join('\n        ')}`)
+    // A `catch` binding is `unknown`; every failure here is an `Error` (`assert` and the
+    // runtime both throw them), so this cast names what is already true, and is erased.
+    const failure = error as Error
+    console.log(`        ${failure.message.split('\n').join('\n        ')}`)
   }
 }
 

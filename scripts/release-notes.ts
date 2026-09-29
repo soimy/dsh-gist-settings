@@ -17,10 +17,10 @@
  *     nothing in it.
  *
  * The section body goes to stdout and every problem to stderr with a non-zero exit,
- * which is what makes `node scripts/release-notes.mjs "$TAG" > notes.md` safe to
+ * which is what makes `node scripts/release-notes.ts "$TAG" > notes.md` safe to
  * pipe: a failure cannot leave a plausible-looking empty file behind.
  *
- * Run with: node scripts/release-notes.mjs v1.2.3   (also `npm run release:notes`)
+ * Run with: node scripts/release-notes.ts v1.2.3   (also `npm run release:notes`)
  */
 
 import fs from 'node:fs'
@@ -29,16 +29,21 @@ import { fileURLToPath } from 'node:url'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 
-const problems = []
-const fail = (message) => problems.push(message)
+const problems: string[] = []
+const fail = (message: string) => problems.push(message)
 
 const tag = (process.argv[2] ?? '').trim()
 const match = /^v(\d+\.\d+\.\d+)$/.exec(tag)
-if (!tag) fail('no tag given; usage: node scripts/release-notes.mjs v1.2.3')
+if (!tag) fail('no tag given; usage: node scripts/release-notes.ts v1.2.3')
 else if (!match) fail(`"${tag}" is not a vMAJOR.MINOR.PATCH tag`)
 const version = match?.[1] ?? null
 
-let pkg = {}
+/** The only field this script reads out of package.json; a file that fails to parse stays `{}`. */
+interface PackageManifest {
+  version?: string
+}
+
+let pkg: PackageManifest = {}
 try {
   pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
 } catch {
@@ -53,8 +58,8 @@ if (version && pkg.version && pkg.version !== version) {
 
 /* ----------------------------------------------------- the changelog section -- */
 
-let body = null
-let date = null
+let body: string | null = null
+let date: string | null = null
 if (version) {
   let text = ''
   try {
@@ -108,4 +113,6 @@ if (problems.length > 0) {
 }
 
 process.stdout.write(`${body}\n`)
-console.error(`release notes for ${tag} (${date}), ${body.split('\n').length} lines`)
+// Every check that can fail and leave `body` unset exits above, so `body` holds the section
+// here; the assertion is erased by the type stripper and the runtime path is unchanged.
+console.error(`release notes for ${tag} (${date}), ${body!.split('\n').length} lines`)

@@ -20,7 +20,7 @@
  * `DSH_ALLOW_SCHEMA_SKIP=1` to accept the skip, or `DSH_TOOLS_DIR` to point at an
  * installation explicitly.
  *
- * Run with: node test/schema.test.mjs
+ * Run with: node test/schema.test.ts
  */
 
 import assert from 'node:assert/strict'
@@ -59,8 +59,19 @@ if (!toolsDir) {
   process.exit(1)
 }
 
-const asFileUrl = (p) => new URL(`file://${p.replace(/\\/g, '/')}`).href
-const { assertSupportedJsonSchema, validateJsonSchemaValue } = await import(
+/**
+ * The two validators this suite replays, described as this file calls them.
+ *
+ * `dsh-tools` is reached by path rather than imported, so its own declarations are
+ * never seen here; this names the two entry points instead of leaving them untyped.
+ */
+interface JsonSchemaValidators {
+  assertSupportedJsonSchema(schema: unknown): void
+  validateJsonSchemaValue(schema: unknown, value: unknown, label: string): unknown[]
+}
+
+const asFileUrl = (p: string): string => new URL(`file://${p.replace(/\\/g, '/')}`).href
+const { assertSupportedJsonSchema, validateJsonSchemaValue }: JsonSchemaValidators = await import(
   asFileUrl(path.join(toolsDir, 'lib', 'types', 'json-schema.js'))
 )
 
@@ -74,26 +85,48 @@ for (const name of ['alpha']) {
   fs.writeFileSync(path.join(dir, 'package.json'), `{\n  "name": "${name}"\n}\n`, 'utf8')
 }
 
-const definitions = []
+/**
+ * One registered tool definition, as far as this suite reads it.
+ *
+ * What the suite re-checks at run time with `typeof` stays `unknown` here, so those
+ * checks keep their meaning: the definitions arrive through Cordis' `register`, and
+ * nothing in this file can assume they were type-checked on the way in.
+ */
+interface RegisteredTool {
+  name: string
+  description?: unknown
+  parameters: {
+    type?: unknown
+    properties?: Record<string, { description?: unknown }>
+  }
+  output: {
+    schema: unknown
+    render(args: unknown, value: unknown): Array<{ type: string; text: string }>
+    presentationMeta?: unknown
+  }
+  execute(args: unknown, exec: { signal?: AbortSignal } | undefined): Promise<unknown>
+}
+
+const definitions: RegisteredTool[] = []
 const ctx = {
   tools: {
-    register(definition) {
+    register(definition: RegisteredTool) {
       definitions.push(definition)
       return () => {}
     },
   },
-  effect(body) {
+  effect(body: () => Generator<() => void, void, unknown>) {
     for (const dispose of body()) void dispose
     return () => {}
   },
 }
 apply(ctx, {
   dshHome: root,
-  ghPath: [process.execPath, path.join(fileURLToPath(new URL('.', import.meta.url)), 'fake-gh.mjs')],
+  ghPath: [process.execPath, path.join(fileURLToPath(new URL('.', import.meta.url)), 'fake-gh.ts')],
 })
 
-const results = []
-async function check(name, fn) {
+const results: boolean[] = []
+async function check(name: string, fn: () => unknown) {
   try {
     await fn()
     results.push(true)
@@ -101,14 +134,17 @@ async function check(name, fn) {
   } catch (error) {
     results.push(false)
     console.log(`  \u001b[31mFAIL\u001b[0m  ${name}`)
-    console.log(`        ${error.message.split('\n').join('\n        ')}`)
+    // A `catch` binding is `unknown`; every failure here is an `Error` (`assert` and the
+    // runtime both throw them), so this cast names what is already true, and is erased.
+    const failure = error as Error
+    console.log(`        ${failure.message.split('\n').join('\n        ')}`)
   }
 }
 
 console.log(`\ndsh-gist-settings schema conformance\n  dsh-tools: ${toolsDir}\n`)
 
 /** Arguments the real validator rejects, paired with what they would do if let through. */
-const BAD_ARGS = [
+const BAD_ARGS: Array<{ label: string; args: unknown }> = [
   { label: 'a misspelled key', args: { profil: 'alpha' } },
   { label: 'a string for a boolean', args: { force: 'false' } },
   { label: 'an explicit null for a string', args: { profile: null } },

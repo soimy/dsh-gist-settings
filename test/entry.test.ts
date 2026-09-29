@@ -17,11 +17,11 @@
  * under test is the real one, not a path spelled out here.
  *
  * A missing artifact FAILS rather than skipping, for the reason
- * `test/schema.test.mjs` fails without a Harness: a check that quietly runs
+ * `test/schema.test.ts` fails without a Harness: a check that quietly runs
  * nothing reads as coverage. `npm test` builds first, so the normal path always
  * has an artifact to load.
  *
- * Run with: node test/entry.test.mjs  (also part of `npm test`)
+ * Run with: node test/entry.test.ts  (also part of `npm test`)
  */
 
 import assert from 'node:assert/strict'
@@ -43,14 +43,55 @@ if (missing.length > 0) {
   process.exit(1)
 }
 
+/**
+ * The two members of a loaded entry this suite reaches: what the Loader reads
+ * (`inject`) and what it calls (`apply`).
+ *
+ * Written structurally, because the entry under test arrives as a loaded module
+ * rather than as an import the compiler can type, and because the definitions it
+ * carries are hand-written plain objects rather than `defineTool` results.
+ */
+interface LoadedEntry {
+  inject: string[]
+  apply(ctx: FakeContext, config: unknown): void
+}
+
+/**
+ * One registered tool, described by exactly what this suite reads of it.
+ *
+ * `parameters`, `output` and the concurrency classifier are optional because the
+ * cases below read them with `?.` and then assert they are there: the assertion
+ * is the test, so this type must not presuppose its outcome.
+ */
+interface RegisteredTool {
+  name: string
+  description: string
+  parameters?: { type: string }
+  output?: {
+    schema?: { type: string }
+    render(args: unknown, value: { text: string }): unknown
+  }
+  isConcurrencySafe?(args?: unknown): boolean
+  execute(...args: unknown[]): unknown
+}
+
+/** The fake context below: a registrar that keeps what it is given, and an effect body. */
+interface FakeContext {
+  tools: { register(definition: RegisteredTool): () => void }
+  effect(body: () => Iterable<() => void>): () => void
+}
+
 /* A load that throws is one of the failures this suite exists to report, so it is
    reported rather than allowed to end the run with a stack trace. */
-let built
+let built: LoadedEntry
 try {
   built = await import(PACKAGE)
 } catch (error) {
+  // A `catch` binding is `unknown`; a failed `import` rejects with an `Error`, so this
+  // cast names what is already true, and it is erased before the file runs.
+  const failure = error as Error
   console.error(`\nFAIL: importing ${PACKAGE} threw, so a profile could not load this plugin:`)
-  console.error(`      ${error.message}\n`)
+  console.error(`      ${failure.message}\n`)
   process.exit(1)
 }
 
@@ -58,9 +99,9 @@ try {
  * Register the plugin's tools through a fake context, the way the runtime does:
  * one labelled effect whose body yields each registration's disposer.
  */
-function registerFrom(module) {
-  const registered = []
-  const ctx = {
+function registerFrom(module: LoadedEntry) {
+  const registered: RegisteredTool[] = []
+  const ctx: FakeContext = {
     tools: {
       register(definition) {
         registered.push(definition)
@@ -76,12 +117,12 @@ function registerFrom(module) {
   return registered
 }
 
-const namesOf = (definitions) => definitions.map((definition) => definition.name).sort()
+const namesOf = (definitions: RegisteredTool[]) => definitions.map((definition) => definition.name).sort()
 
 /* ------------------------------------------------------------- mini runner -- */
 
-const results = []
-async function check(name, fn) {
+const results: boolean[] = []
+async function check(name: string, fn: () => void | Promise<void>) {
   try {
     await fn()
     results.push(true)
@@ -89,7 +130,10 @@ async function check(name, fn) {
   } catch (error) {
     results.push(false)
     console.log(`  \u001b[31mFAIL\u001b[0m  ${name}`)
-    console.log(`        ${error.message.split('\n').join('\n        ')}`)
+    // A `catch` binding is `unknown`; every failure here is an `Error` (`assert` and the
+    // runtime both throw them), so this cast names what is already true, and is erased.
+    const failure = error as Error
+    console.log(`        ${failure.message.split('\n').join('\n        ')}`)
   }
 }
 
@@ -147,7 +191,7 @@ await check('the built entry registers exactly what the source entry registers',
   // concurrency verdict — because a comparison of `name`/`description`/`parameters`
   // alone would call a build that changed only behaviour identical.
   const source = await import('../index.ts')
-  const fingerprint = (definitions) =>
+  const fingerprint = (definitions: RegisteredTool[]) =>
     definitions
       .map((definition) => ({
         name: definition.name,

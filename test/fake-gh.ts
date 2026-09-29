@@ -2,7 +2,7 @@
 /**
  * A stand-in for the real `gh` CLI, used only by the test suite.
  *
- * It implements the slice of the GitHub API that `lib/core.js` touches:
+ * It implements the slice of the GitHub API that `lib/core.ts` touches:
  * `--version`, `auth status`, and `api` requests against `/gists`. State lives in
  * the JSON file named by `FAKE_GH_STORE`, so a test can run the full
  * upload/download/sync cycle without network access or a GitHub account.
@@ -26,16 +26,45 @@
 
 import fs from 'node:fs'
 
-import { flushThenExit } from './stdout-flush.mjs'
+import { flushThenExit } from './stdout-flush.ts'
+
+/** One gist as the store keeps it: the API fields the double hands back, plus each file's full content. */
+interface StoredGist {
+  id: string
+  description: string
+  public: boolean
+  html_url: string
+  updated_at: string
+  files: Record<string, string>
+}
+
+/** The JSON store named by `FAKE_GH_STORE`: the gists written so far, and the counter naming the next. */
+interface GistStore {
+  seq: number
+  gists: Record<string, StoredGist>
+}
+
+/**
+ * The body of a `gh api --input -` request, as `lib/core.ts` builds it: what a create
+ * sends, plus the `null` file value a patch sends to delete one.
+ */
+interface GistRequestBody {
+  description?: string
+  public?: boolean
+  files?: Record<string, { content: string } | null>
+}
 
 const STORE = process.env.FAKE_GH_STORE
 if (!STORE) {
   process.stderr.write('FAKE_GH_STORE is not set\n')
   process.exit(2)
 }
+// The guard above runs before either function below can: that is the fact the two
+// `STORE!` reads rest on. TypeScript narrows `STORE` for this scope but not inside a
+// function body, which is why they have to restate it.
 
 const VERSION = 'gh version 0.0.0-fake (test-double)'
-const list = (name) =>
+const list = (name: string) =>
   (process.env[name] ?? '')
     .split(',')
     .map((entry) => entry.trim())
@@ -44,16 +73,16 @@ const list = (name) =>
 const TRUNCATE = list('FAKE_GH_TRUNCATE')
 const FAIL_GET = list('FAKE_GH_FAIL_GET')
 
-function load() {
+function load(): GistStore {
   try {
-    return JSON.parse(fs.readFileSync(STORE, 'utf8'))
+    return JSON.parse(fs.readFileSync(STORE!, 'utf8'))
   } catch {
     return { seq: 0, gists: {} }
   }
 }
 
-function save(data) {
-  fs.writeFileSync(STORE, JSON.stringify(data, null, 2), 'utf8')
+function save(data: GistStore) {
+  fs.writeFileSync(STORE!, JSON.stringify(data, null, 2), 'utf8')
 }
 
 async function readStdin() {
@@ -62,7 +91,7 @@ async function readStdin() {
   return Buffer.concat(chunks).toString('utf8')
 }
 
-function out(value) {
+function out(value: unknown) {
   process.stdout.write(typeof value === 'string' ? value : `${JSON.stringify(value, null, 2)}\n`)
 }
 
@@ -70,7 +99,7 @@ function out(value) {
  * Exit once the response body has actually reached the pipe.
  *
  * The waiting, the limit and the refusal to exit 0 on a body that was not delivered
- * live in `stdout-flush.mjs`, which is a module so that branch can be tested
+ * live in `stdout-flush.ts`, which is a module so that branch can be tested
  * directly. Must be awaited, and used only where a body was just written:
  * `process.exit()` never returns, so replacing it with something that does would let
  * the request handling run on and answer a second time. The error paths keep the
@@ -81,12 +110,12 @@ async function drainThenExit(code = 0) {
   await flushThenExit({ code })
 }
 
-function fail(message, code = 1) {
+function fail(message: string, code = 1) {
   process.stderr.write(`${message}\n`)
   process.exit(code)
 }
 
-function rawUrlFor(gist, name) {
+function rawUrlFor(gist: StoredGist, name: string) {
   const base = process.env.FAKE_GH_RAW_BASE ?? 'https://gist.githubusercontent.com/testuser'
   return `${base}/${gist.id}/raw/${name}`
 }
@@ -96,7 +125,7 @@ function rawUrlFor(gist, name) {
  * reported the way real GitHub reports a large one: a `truncated` flag, a partial
  * `content`, and a `raw_url` carrying the rest.
  */
-function project(gist) {
+function project(gist: StoredGist) {
   return {
     id: gist.id,
     description: gist.description,
@@ -130,7 +159,7 @@ function project(gist) {
  * is fetched directly — so this branch now documents what `gh api <url>` would
  * have answered, and keeps the double faithful to the real CLI.
  */
-async function serveRaw(url) {
+async function serveRaw(url: string) {
   if (process.env.FAKE_GH_FAIL_RAW === '1') fail(`fake gh: HTTP 502: Bad Gateway (${url})`)
   const parsed = new URL(url)
   const parts = parsed.pathname.split('/').filter(Boolean)
@@ -191,7 +220,10 @@ for (let i = 0; i < rest.length; i += 1) {
 if (endpoint?.startsWith('https://')) await serveRaw(endpoint)
 
 const data = load()
-const body = inputFromStdin ? JSON.parse((await readStdin()) || '{}') : null
+// Only a request that carries a body is read below, and every POST or PATCH arrives
+// with `--input -`; the `null` arm covers GET and DELETE, which never reach those
+// branches. The assertion names the shape `JSON.parse` cannot.
+const body = (inputFromStdin ? JSON.parse((await readStdin()) || '{}') : null) as GistRequestBody
 
 const gistMatch = endpoint?.match(/^\/gists\/([^/?]+)$/)
 
@@ -205,7 +237,8 @@ if (endpoint === '/gists' && method === 'POST') {
     public: Boolean(body.public),
     html_url: `https://gist.github.com/testuser/${id}`,
     updated_at: new Date().toISOString(),
-    files: Object.fromEntries(Object.entries(body.files ?? {}).map(([n, f]) => [n, f.content])),
+    // A create body always carries `{ content }`; `null` is what a patch sends to delete.
+    files: Object.fromEntries(Object.entries(body.files ?? {}).map(([n, f]) => [n, f!.content])),
   }
   data.gists[id] = gist
   save(data)

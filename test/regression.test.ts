@@ -6,7 +6,7 @@
  * mutation audit found in the original suite: the happy path was well covered,
  * but the guards, the negative branches and the tool layer were not.
  *
- * Run with: node test/regression.test.mjs
+ * Run with: node test/regression.test.ts
  */
 
 import assert from 'node:assert/strict'
@@ -19,19 +19,20 @@ import { promisify } from 'node:util'
 
 import * as core from '../lib/core.ts'
 
-import { flushThenExit } from './stdout-flush.mjs'
+import { flushThenExit } from './stdout-flush.ts'
 
 const run = promisify(execFile)
 const here = path.dirname(fileURLToPath(import.meta.url))
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-gist-regress-'))
-process.env.FAKE_GH_STORE = path.join(root, 'fake-store.json')
+const storePath = path.join(root, 'fake-store.json')
+process.env.FAKE_GH_STORE = storePath
 
-const fakeGh = [process.execPath, path.join(here, 'fake-gh.mjs')]
+const fakeGh = [process.execPath, path.join(here, 'fake-gh.ts')]
 const config = { dshHome: root, ghPath: fakeGh }
 const ghPath = config.ghPath
 
-async function seed(name, files) {
+async function seed(name: string, files: Record<string, string>) {
   const dir = path.join(root, 'profiles', name)
   await fs.mkdir(dir, { recursive: true })
   for (const [file, content] of Object.entries(files)) {
@@ -39,8 +40,21 @@ async function seed(name, files) {
   }
 }
 
-const profileDir = (name) => path.join(root, 'profiles', name)
-const store = async () => JSON.parse(await fs.readFile(process.env.FAKE_GH_STORE, 'utf8'))
+const profileDir = (name: string) => path.join(root, 'profiles', name)
+
+/** One gist as the fixture `gh` double stores it, in the fields this file reads back. */
+interface FakeGist {
+  id: string
+  public: boolean
+  files: Record<string, string>
+}
+
+/** The fixture store file: one entry per gist the double has been asked to create. */
+interface FakeStore {
+  gists: Record<string, FakeGist>
+}
+
+const store = async (): Promise<FakeStore> => JSON.parse(await fs.readFile(storePath, 'utf8'))
 const freshEnv = () => {
   delete process.env.FAKE_GH_TRUNCATE
   delete process.env.FAKE_GH_RAW_BASE
@@ -52,8 +66,8 @@ const freshEnv = () => {
 
 /* ------------------------------------------------------------- mini runner -- */
 
-const results = []
-async function check(name, fn) {
+const results: boolean[] = []
+async function check(name: string, fn: () => Promise<void>) {
   freshEnv()
   try {
     await fn()
@@ -62,7 +76,10 @@ async function check(name, fn) {
   } catch (error) {
     results.push(false)
     console.log(`  \u001b[31mFAIL\u001b[0m  ${name}`)
-    console.log(`        ${error.message.split('\n').join('\n        ')}`)
+    // A `catch` binding is `unknown`; every failure here is an `Error` (`assert` and the
+    // runtime both throw them), so this cast names what is already true, and is erased.
+    const failure = error as Error
+    console.log(`        ${failure.message.split('\n').join('\n        ')}`)
   } finally {
     freshEnv()
   }
@@ -78,7 +95,7 @@ await check('ghRun survives a child that exits without draining a >64 KiB stdin 
   // buffer then fails with EPIPE; without an error listener that is an uncaught
   // exception which kills the host process. A regression here takes this whole
   // test file down, which is the loudest possible failure.
-  const stub = path.join(root, 'exit-early-gh.mjs')
+  const stub = path.join(root, 'exit-early-gh.ts')
   await fs.writeFile(stub, 'process.exit(1)\n', 'utf8')
 
   const res = await core.ghRun([process.execPath, stub], ['api', '--input', '-'], {
@@ -113,8 +130,8 @@ await check('a gh that exits 0 while logged out is still unauthenticated', async
 })
 
 await check('a delivered response exits with the code it was given', async () => {
-  const codes = []
-  const errors = []
+  const codes: number[] = []
+  const errors: string[] = []
   await flushThenExit({
     code: 7,
     timeoutMs: 50,
@@ -138,8 +155,8 @@ await check('a response whose flush misses its budget fails loudly, never as a s
   // the rest of the body and carries on, while on Windows a full pipe blocks the
   // writing thread, so the process never reaches its own timeout and a test can only
   // hang.
-  const codes = []
-  const errors = []
+  const codes: number[] = []
+  const errors: string[] = []
   await flushThenExit({
     code: 0,
     timeoutMs: 0,
@@ -158,7 +175,8 @@ await check('an unreachable gist is not reported as deleted', async () => {
   process.env.FAKE_GH_FAIL_GET = up.gistId
   const status = await core.profileStatus('gamma', { ghPath, config })
   assert.equal(status.status, 'unreachable', 'a 500 must not read as a deleted gist')
-  assert.match(status.error, /500/)
+  // `error` is exactly the field the `unreachable` status carries, pinned by the line above.
+  assert.match(status.error!, /500/)
 })
 
 await check('an upload refuses to mint a replacement gist when the gist is unreachable', async () => {
@@ -260,7 +278,9 @@ await check('editing the SECOND tracked file is detected, not just the first', a
 
   const result = await core.syncProfile('delta', { ghPath, config })
   assert.equal(result.action, 'uploaded')
-  const gist = await core.gistGet(ghPath, result.gistId)
+  // An `uploaded` action is one that went through `uploadProfile`, which records the
+  // gist it wrote; the assertion above pins the action.
+  const gist = await core.gistGet(ghPath, result.gistId!)
   assert.equal(gist.files['package.json'], 'ccc\n')
 })
 
@@ -270,15 +290,17 @@ await check('a truncated gist file is fetched whole from the raw_url the API nam
   await seed('epsilon', { 'cordis.patch.yml': 'abcdefghijklmnopqrstuvwxyz\n', 'package.json': '{}\n' })
   await core.uploadProfile('epsilon', { ghPath, config })
   const state = await core.loadState(config)
-  const gistId = state.profiles.epsilon.gistId
+  const record = state.profiles.epsilon
+  assert.ok(record, 'profile "epsilon" must already be tracked in the fixture state')
+  const gistId = record.gistId
 
   process.env.FAKE_GH_TRUNCATE = 'cordis.patch.yml'
-  const calls = []
+  const calls: { url: string; options: RequestInit }[] = []
   // Injected rather than served by the double: the claim under test is that the
   // plugin asks the URL the API named, with `fetch`, and takes the whole body.
   // Asserting against a URL this suite also happens to serve would only prove the
   // double agrees with itself.
-  const fetchImpl = async (url, options) => {
+  const fetchImpl = async (url: string, options: RequestInit) => {
     calls.push({ url, options })
     // `url` is part of the contract: the final URL is checked, so a response that
     // does not report one is refused rather than trusted.
@@ -291,7 +313,9 @@ await check('a truncated gist file is fetched whole from the raw_url the API nam
     }
   }
 
-  const gist = await core.gistGet(ghPath, gistId, { fetchImpl })
+  // `core` declares this seam as the global `fetch`, which the double cannot be: it
+  // answers with exactly the fields the raw-content path reads, so it is asserted to it.
+  const gist = await core.gistGet(ghPath, gistId, { fetchImpl: fetchImpl as typeof fetch })
   assert.deepEqual(gist.truncated, ['cordis.patch.yml'])
   assert.equal(
     gist.files['cordis.patch.yml'],
@@ -306,6 +330,8 @@ await check('a truncated gist file is fetched whole from the raw_url the API nam
 await check('a raw_url on a lookalike host is refused unfetched', async () => {
   process.env.FAKE_GH_TRUNCATE = 'cordis.patch.yml'
   const state = await core.loadState(config)
+  const record = state.profiles.epsilon
+  assert.ok(record, 'profile "epsilon" must already be tracked in the fixture state')
   // The first is obviously foreign, and every variant of the check rejects it —
   // which is why it cannot be the only case. The rest are the ones a loosened
   // suffix test, or a check that validates a decoded string while handing the raw
@@ -321,10 +347,10 @@ await check('a raw_url on a lookalike host is refused unfetched', async () => {
     let fetched = 0
     await assert.rejects(
       () =>
-        core.gistGet(ghPath, state.profiles.epsilon.gistId, {
+        core.gistGet(ghPath, record.gistId, {
           fetchImpl: async () => {
             fetched += 1
-            return { ok: true, status: 200, statusText: 'OK', text: async () => 'leaked' }
+            return { ok: true, status: 200, statusText: 'OK', text: async () => 'leaked' } as Response
           },
         }),
       /not a trusted GitHub URL/,
@@ -337,10 +363,12 @@ await check('a raw_url on a lookalike host is refused unfetched', async () => {
 await check('a raw_url answering with an error status is reported, not silently truncated', async () => {
   process.env.FAKE_GH_TRUNCATE = 'cordis.patch.yml'
   const state = await core.loadState(config)
+  const record = state.profiles.epsilon
+  assert.ok(record, 'profile "epsilon" must already be tracked in the fixture state')
   await assert.rejects(
     () =>
-      core.gistGet(ghPath, state.profiles.epsilon.gistId, {
-        fetchImpl: async () => ({ ok: false, status: 403, statusText: 'Forbidden', text: async () => '' }),
+      core.gistGet(ghPath, record.gistId, {
+        fetchImpl: async () => ({ ok: false, status: 403, statusText: 'Forbidden', text: async () => '' } as Response),
       }),
     /could not be fetched from .*HTTP 403 Forbidden/,
   )
@@ -350,7 +378,9 @@ await check('a raw_url answering with an error status is reported, not silently 
 
 await check('a download never writes a gist file that is not tracked', async () => {
   const state = await core.loadState(config)
-  const gistId = state.profiles.epsilon.gistId
+  const record = state.profiles.epsilon
+  assert.ok(record, 'profile "epsilon" must already be tracked in the fixture state')
+  const gistId = record.gistId
   await core.gistPatch(ghPath, gistId, { files: { 'evil.js': 'process.exit(1)\n' } })
 
   await fs.rm(path.join(profileDir('epsilon'), 'cordis.patch.yml'))
@@ -362,7 +392,9 @@ await check('a download never writes a gist file that is not tracked', async () 
 
 await check('a download writes every tracked file, not just the first', async () => {
   const state = await core.loadState(config)
-  const gistId = state.profiles.epsilon.gistId
+  const record = state.profiles.epsilon
+  assert.ok(record, 'profile "epsilon" must already be tracked in the fixture state')
+  const gistId = record.gistId
   await core.gistPatch(ghPath, gistId, {
     files: { 'cordis.patch.yml': 'REMOTE-A\n', 'package.json': 'REMOTE-B\n' },
   })
@@ -374,7 +406,9 @@ await check('a download writes every tracked file, not just the first', async ()
 
 await check('a gist holding none of the tracked files names the way out', async () => {
   const state = await core.loadState(config)
-  const gistId = state.profiles.epsilon.gistId
+  const record = state.profiles.epsilon
+  assert.ok(record, 'profile "epsilon" must already be tracked in the fixture state')
+  const gistId = record.gistId
   await core.gistPatch(ghPath, gistId, { files: { 'cordis.patch.yml': null, 'package.json': null } })
   await assert.rejects(() => core.downloadProfile('epsilon', { ghPath, config }), /gist_upload/)
 })
@@ -431,7 +465,9 @@ await check('a stale in-sync baseline is repaired instead of causing a false div
   assert.equal(status.status, 'in-sync')
 
   const repaired = await core.loadState(config)
-  assert.notEqual(repaired.profiles.delta.lastSyncedHash, 'stale-baseline-value')
+  const record = repaired.profiles.delta
+  assert.ok(record, 'profile "delta" must already be tracked in the fixture state')
+  assert.notEqual(record.lastSyncedHash, 'stale-baseline-value')
 
   // With the baseline repaired, the next ordinary edit is a normal upload.
   await fs.writeFile(path.join(profileDir('delta'), 'package.json'), 'ddd\n', 'utf8')
@@ -503,7 +539,8 @@ await check('health() still reports paths when gh cannot be found', async () => 
 await check('resolveGh returns a reason rather than throwing for an unusable path', async () => {
   const resolved = await core.resolveGh({ ghPath: path.join(root, 'nope.exe') })
   assert.equal(resolved.path, null)
-  assert.match(resolved.reason, /does not exist/)
+  // `reason` is present exactly when `path` is null, which the line above pins.
+  assert.match(resolved.reason!, /does not exist/)
 })
 
 /* ----------------------------------------------------- directory containment -- */

@@ -1,7 +1,7 @@
 name: CI
 
 # The offline suites need no credentials: every `gh` call in them goes to
-# `test/fake-gh.mjs`, and neither the plugin nor its tests import anything outside
+# `test/fake-gh.ts`, and neither the plugin nor its tests import anything outside
 # `node:`. The `suites` job therefore runs exactly the command a contributor runs,
 # on every platform and Node version the plugin claims to support — which matters
 # here, because the code takes a different path on each: case folding and reserved
@@ -54,7 +54,7 @@ jobs:
           - os: ubuntu-latest
             node: '22.19.0'
     env:
-      # `test/schema.test.mjs` fails rather than skipping when it cannot find an
+      # `test/schema.test.ts` fails rather than skipping when it cannot find an
       # installed Harness, and that is deliberate: a contract check that quietly
       # runs nothing reads as coverage. These legs do not install one — that is
       # hundreds of packages each, to re-prove what the `schema` job below proves

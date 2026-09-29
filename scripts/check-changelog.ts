@@ -12,7 +12,7 @@
  *   - `package.json`'s version is one of the released headings;
  *   - every heading has exactly one link definition, and vice versa.
  *
- * Run with: node scripts/check-changelog.mjs  (also part of `npm test`)
+ * Run with: node scripts/check-changelog.ts  (also part of `npm test`)
  */
 
 import fs from 'node:fs'
@@ -22,8 +22,8 @@ import { fileURLToPath } from 'node:url'
 const root = fileURLToPath(new URL('..', import.meta.url))
 const changelogPath = path.join(root, 'CHANGELOG.md')
 
-const problems = []
-const fail = (message) => problems.push(message)
+const problems: string[] = []
+const fail = (message: string) => problems.push(message)
 
 let text
 try {
@@ -63,7 +63,7 @@ if (headings[0] && headings[0].version !== 'Unreleased') {
 /* ------------------------------------------------------------- versions -- */
 
 const semver = /^\d+\.\d+\.\d+$/
-const compare = (a, b) => {
+const compare = (a: string, b: string) => {
   const [aMajor, aMinor, aPatch] = a.split('.').map(Number)
   const [bMajor, bMinor, bPatch] = b.split('.').map(Number)
   return aMajor - bMajor || aMinor - bMinor || aPatch - bPatch
