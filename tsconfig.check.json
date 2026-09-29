@@ -1,0 +1,11 @@
+{
+  // Type-checks the whole repository, tests and scripts included, without emitting:
+  // those files run from source under Node's own type stripping, so compiling them
+  // would create a second copy that no one loads.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false
+  },
+  "include": ["index.ts", "lib/**/*.ts", "test/**/*.ts", "scripts/**/*.ts", "types/**/*.d.ts"]
+}

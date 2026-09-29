@@ -7,13 +7,15 @@
   "license": "MIT",
   "icon": "./icon.svg",
   "exports": {
-    ".": "./index.ts",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json"
   },
   "files": [
-    "index.ts",
-    "lib/",
+    "dist/",
     "locale/",
     "icon.svg",
     "cordis.patch.yml",
@@ -24,6 +26,10 @@
     "CONTRIBUTING.md"
   ],
   "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:watch": "tsc -p tsconfig.json --watch --preserveWatchOutput",
+    "typecheck": "tsc -p tsconfig.check.json",
+    "pretest": "npm run build",
     "test": "node test/sync.test.mjs && node test/tools.test.mjs && node test/schema.test.mjs && node test/regression.test.mjs && node test/safety.test.mjs && node test/release.test.mjs && node test/docs.test.mjs && node scripts/check-changelog.mjs && node scripts/check-docs.mjs",
     "test:sync": "node test/sync.test.mjs",
     "test:tools": "node test/tools.test.mjs",
@@ -52,5 +58,9 @@
     "bundle": {
       "patch": "./cordis.patch.yml"
     }
+  },
+  "devDependencies": {
+    "@types/node": "22.20.4",
+    "typescript": "5.9.3"
   }
 }

@@ -69,8 +69,14 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.0.4
         with:
           node-version: ${{ matrix.node }}
-      # No `npm ci` step: the package has no dependencies and no lockfile, and
-      # `npm ci` refuses to run without one. `npm test` needs nothing installed.
+      # The plugin still has no runtime dependencies, but `npm test` now builds the
+      # half the Harness loads — `pretest` runs `tsc` — so the pinned toolchain is
+      # installed here. `--include=dev` is not decorative: npm omits devDependencies
+      # whenever `NODE_ENV=production`, and that install exits 0 having installed
+      # nothing, which reads as success right up until `tsc` is not found. There is
+      # still no `npm ci`: this repository deliberately commits no lockfile.
+      - name: Install the pinned toolchain
+        run: npm install --include=dev --no-audit --no-fund
       - name: Offline suites and repository checks
         run: npm test
 
