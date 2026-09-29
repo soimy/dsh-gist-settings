@@ -11,7 +11,7 @@
 
 import fs from 'node:fs/promises'
 
-import * as core from '../lib/core.js'
+import * as core from '../lib/core.ts'
 
 const [logPath, tag, holdMs, dshHome] = process.argv.slice(2)
 

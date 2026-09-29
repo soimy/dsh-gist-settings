@@ -7,12 +7,12 @@
   "license": "MIT",
   "icon": "./icon.svg",
   "exports": {
-    ".": "./index.js",
+    ".": "./index.ts",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json"
   },
   "files": [
-    "index.js",
+    "index.ts",
     "lib/",
     "locale/",
     "icon.svg",

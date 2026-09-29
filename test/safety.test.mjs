@@ -21,7 +21,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 
-import * as core from '../lib/core.js'
+import * as core from '../lib/core.ts'
 
 const run = promisify(execFile)
 const here = path.dirname(fileURLToPath(import.meta.url))

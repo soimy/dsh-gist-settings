@@ -15,7 +15,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { apply } from '../index.js'
+import { apply } from '../index.ts'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-gist-tools-'))
