@@ -275,7 +275,7 @@ never inside it).
 **Files:** `docs/spec/<date>-device-override-design.md` (new). Naming and the no-links rule follow
 `docs/spec/README.md`.
 
-- [ ] **Step 1: Write the spec**
+- [x] **Step 1: Write the spec**
 
   It states the problem with the ping-pong evidence from the issue, the three candidate mechanisms
   above with their costs, the decision, the override file's location and expansion set, the exact
@@ -299,8 +299,9 @@ canonical bytes, download writes the local form, and hashes are taken over canon
 value that is *correct on both sides and deliberately different* reads `in-sync` instead of
 `diverged`. Issue #4's own acceptance criteria are the bar; they are restated here as steps.
 
-**Files:** `lib/core.ts` (the model and the three call sites), the module the spec names for the
-override reader, `index.ts` (`readConfig`, the status row, the result text), `test/sync.test.ts`,
+**Files:** `lib/core.ts` (the model and the three call sites), `lib/overrides.ts` (the reader and the
+two substitution functions the spec names), `index.ts` (`readConfig`, the status row, the result text),
+`test/overrides.test.ts` (new), `test/sync.test.ts`,
 `test/tools.test.ts`, `test/regression.test.ts`, `test/safety.test.ts`, `README.md` and
 `README.zh-CN.md` (the configuration table, in both languages), `docs/user/reference/configuration.md`,
 `docs/user/reference/recovery.md` (only if `force` semantics change), `cordis.patch.yml` (the
@@ -469,12 +470,14 @@ be guessing:
 
 ### Decisions this plan does not make
 
-- **Which override mechanism issue #4 gets.** The spec in Task 5 decides between a structured
-  per-key override with a small in-repo reader, textual rewrites, and a narrowed v1 (`package.json`
-  structured, the rest textual). The deciding constraint is that this repository ships no YAML
-  parser and will not add one; the decider is what "refuse rather than guess" costs over each
-  format. Recommendation: structured over `package.json`, textual for everything else, with the
-  full mechanism deferred until a user actually needs a key inside a YAML file that is not a path.
+- **Which override mechanism issue #4 gets.** *Settled by
+  [the device-override design](../spec/2026-09-30-device-override-design.md):* a device-local JSON file
+  of `canonical`/`local` literal pairs, substituted as text in the tracked file rather than by parsing
+  and re-serialising it. The constraint this plan named decided it — the repository ships no YAML parser
+  and will not add one — and a second argument turned out to be the sharper one: a re-serialised
+  canonical form cannot equal the bytes a device without an override uploaded verbatim, so `in-sync`
+  would be unreachable for exactly the mixed fleet the feature exists for. The structured per-key reader
+  is deferred, with its shape and its trigger written down, rather than rejected.
 - **Whether Task 7 moves ahead of Task 6.** Extracting the operation layer first gives issue #4's
   new "overridden locally" reporting a single home, at the cost of putting a refactor in front of a
   filed defect. The order above keeps the defect first; swapping the two is defensible and changes

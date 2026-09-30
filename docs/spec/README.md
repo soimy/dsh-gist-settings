@@ -13,5 +13,10 @@ Specs are not published anywhere and are not linked from the README. `docs/plans
 directory for execution: a plan says what will be done, in what order, and how each step is verified,
 while a spec says what the thing is.
 
-There are no specs yet. The first candidate is the settings page, which is the one open product item
-without a design — see [the roadmap](../plans/2026-09-30-post-typescript-roadmap.md).
+Specs so far:
+
+- [Device override layer](2026-09-30-device-override-design.md) — the mechanism issue #4 needs, settled
+  before Task 6 of the roadmap implements it.
+
+The next candidate is the settings page, which is the one open product item without a design — see
+[the roadmap](../plans/2026-09-30-post-typescript-roadmap.md).
