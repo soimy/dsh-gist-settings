@@ -266,8 +266,9 @@ each option has a failure mode that matters:
 - **Narrowing v1 to `package.json`** (structured, `JSON.parse`) plus textual rewrites for the rest.
 
 Two smaller decisions belong to the same spec, because implementing them twice is the cost of
-getting them wrong: where the override file lives (a directory of per-profile files under `stateDir`
-is device-local by construction; a single file named by the config row is *not* per-profile, and a
+getting them wrong: where the override file lives (a directory of per-profile files outside every profile,
+discovered from the environment so that a tracked `stateDir` cannot hide the file that localizes it, is
+device-local by construction; a single file named by the config row is *not* per-profile, and a
 key inside the plugin's own `cordis.patch.yml` row is uploaded and restored on the other device,
 which is the circularity the issue describes), and where canonicalisation sits (before `hashFiles`,
 never inside it).
@@ -280,8 +281,10 @@ never inside it).
   It states the problem with the ping-pong evidence from the issue, the three candidate mechanisms
   above with their costs, the decision, the override file's location and expansion set, the exact
   point in `uploadProfile` / `downloadProfile` / `profileStatus` where canonicalisation is applied,
-  what `gist_status` and the tool results say about an overridden location, and what happens when a
-  named location is missing or has an unexpected shape.
+  what `gist_status` and the tool results say about an overridden location, what happens when a named
+  literal is absent, ambiguous or conflicting, what the override declaration does to the recorded
+  baseline when it is added, removed or edited, and which profile's failure a bulk report is allowed to
+  lose.
 
 - [ ] **Step 2: Record the decision on the issue**
 
@@ -299,38 +302,49 @@ canonical bytes, download writes the local form, and hashes are taken over canon
 value that is *correct on both sides and deliberately different* reads `in-sync` instead of
 `diverged`. Issue #4's own acceptance criteria are the bar; they are restated here as steps.
 
-**Files:** `lib/core.ts` (the model and the three call sites), `lib/overrides.ts` (the reader and the
-two substitution functions the spec names), `index.ts` (`readConfig`, the status row, the result text),
+**Files:** `lib/core.ts` (the model, the three call sites, the state field and the classification),
+`lib/overrides.ts` (the reader, the two substitution functions and the declaration fingerprint the spec
+names), `index.ts` (the status row, the report line, the failure row, the result text),
 `test/overrides.test.ts` (new), `test/sync.test.ts`,
 `test/tools.test.ts`, `test/regression.test.ts`, `test/safety.test.ts`, `README.md` and
-`README.zh-CN.md` (the configuration table, in both languages), `docs/user/reference/configuration.md`,
-`docs/user/reference/recovery.md` (only if `force` semantics change), `cordis.patch.yml` (the
+`README.zh-CN.md` (the configuration table and the status names, in both languages),
+`docs/user/reference/configuration.md`, `docs/user/reference/tools.md` (the status table and the report
+line), `docs/user/reference/recovery.md` (what `force` may cross: a changed declaration, never a refused
+override), `docs/contributor/architecture.md` (the module, the classification and the state field),
+`AGENTS.md` (the code map and the status count), `cordis.patch.yml` (the
 template's commented block), `CHANGELOG.md`.
 
 - [ ] **Step 1: Load and validate the override file**
 
-  Device-local, never tracked, never uploaded. Unknown keys, a version this reader does not know, a
-  target file that is not in `profileFiles`, a location that does not resolve, and a value of the
-  wrong shape are all refused with the file and the key in the message — the existing "refuse rather
-  than guess" stance, so a typo cannot look like a working sync.
+  Device-local, never tracked, never uploaded, and discovered from the environment rather than from
+  `config.stateDir` or `config.dshHome`, for the reason the spec gives. Unknown top-level keys, a
+  version this reader does not know, a target file that is not in `profileFiles`, an entry that is not a
+  `canonical`/`local` pair of non-empty differing strings, a literal that is absent from the file, a
+  literal that occurs more than once, both spellings present after the spec's containment discount, and
+  two entries whose spans overlap are all refused with the file and the entry in the message — the
+  existing "refuse rather than guess" stance, so a typo cannot look like a working sync. There is no key
+  to name: a text locator has no keys, and the key-level vocabulary belongs to the deferred `path`
+  locator.
 
 - [ ] **Step 2: Canonicalise on the way out**
 
-  `uploadProfile` publishes canonical bytes, and the recorded baseline is the canonical hash. A
-  device therefore never pushes its own path into the shared gist.
+  `uploadProfile` publishes canonical bytes, and the recorded baseline is the canonical hash, recorded
+  together with the fingerprint of the declaration that produced it. A device therefore never pushes its
+  own path into the shared gist — and the result carries the applications from that canonicalisation.
 
 - [ ] **Step 3: Substitute on the way in**
 
   `downloadProfile` applies the overrides to the **staged** bytes before the rename, so an override
   that fails aborts the whole download and nothing is replaced — the existing all-or-nothing write
-  and its backup carry the feature for free.
+  and its backup carry the feature for free. The result carries the applications from that localization,
+  because it never computes a status to read them from.
 
-- [ ] **Step 4: Report overridden locations**
+- [ ] **Step 4: Report overridden locations without echoing values**
 
   `profileStatus` hashes canonical content on both sides, and the status row and tool results name
-  what was overridden (`overridden locally: package.json → dependencies["@local/dsh-gist-settings"]`).
-  A file that differs on disk from the gist must never be reported as plain `in sync` without that
-  explanation.
+  what was overridden (`overridden locally: package.json — override #1 (applied)`). A file that differs
+  on disk from the gist must never be reported as plain `in sync` without that
+  explanation, and the canonical and local values never appear in tool text.
 
 - [ ] **Step 5: Prove the override file cannot enter the round trip**
 
@@ -348,6 +362,25 @@ template's commented block), `CHANGELOG.md`.
   Gist holds `link:C:/Users/sym/Repo/dsh-gist-settings`; a Linux device with the override reports
   `in sync`; `gist_download` writes the Linux path without `force`; `gist_upload` leaves the gist's
   value untouched; a device A → B → A round trip converges with no `force` and no stale baseline.
+
+- [ ] **Step 8: Pair the baseline with the declaration that produced it**
+
+  `ProfileRecord` gains the fingerprint of the override declaration each `lastSyncedHash` was recorded
+  under, written in the same locked write as the hash itself. A declaration that differs from the
+  recorded one is never classified as an ordinary `local-ahead`: when the two sides already agree the
+  baseline and fingerprint are re-recorded together (the stale-baseline repair, extended), and when they
+  do not the profile reads `override-changed`, which `gist_sync` refuses without `force`. The lifecycle
+  table in the spec — enable, disable, a lost file, an edited entry, a local-only edit and a stale
+  baseline — is the case list, and it must include the transition the fingerprint exists for: with the
+  override file removed and the local file still holding its own path, a sync uploads nothing.
+
+- [ ] **Step 9: Isolate a failing profile in the bulk status reports**
+
+  `statusAll` and `gist_status`'s fleet loop catch the override layer's marked refusal per profile, push
+  `{ profile, status: 'failed', error }` and report the remaining profiles, the way `syncAll` already
+  does for the verbs. A named-profile call still fails loudly, and a throw this design did not introduce
+  keeps today's behaviour — which Step 6 requires, so the catch is on the marker rather than on every
+  error.
 
   Run: `npm test && npm run typecheck`
   Expected: green, with the new cases and every count updated.
@@ -477,7 +510,19 @@ be guessing:
   and will not add one — and a second argument turned out to be the sharper one: a re-serialised
   canonical form cannot equal the bytes a device without an override uploaded verbatim, so `in-sync`
   would be unreachable for exactly the mixed fleet the feature exists for. The structured per-key reader
-  is deferred, with its shape and its trigger written down, rather than rejected.
+  is deferred, with its shape and its trigger written down, rather than rejected. Three consequences the
+  spec review forced into the open travel with it, and Task 6 implements them: the override file
+  is discovered from the environment rather than under `stateDir`, because `stateDir` is one of the values
+  the file exists to localize; the recorded baseline is paired with a fingerprint of the declaration it
+  was taken under, so a deleted override file cannot turn into an automatic upload of this device's raw
+  path; and a refusal is isolated per profile in both bulk status paths, which today have no per-profile
+  catch at all.
+- **How far v1 reaches into runtime configuration.** *Settled by the same spec:* the declaration covers
+  `ghPath`, `dshHome`, `profilesDir` and `stateDir` like any other text, but only `stateDir` is
+  self-recovering after another device's copy lands here. `dshHome`, `profilesDir` and `ghPath` decide
+  whether the profile and `gh` can be found at all, so a machine that has received another machine's
+  values needs one hand edit before v1 can maintain them. Recovering that automatically is the
+  bootstrapping issue, not this task.
 - **Whether Task 7 moves ahead of Task 6.** Extracting the operation layer first gives issue #4's
   new "overridden locally" reporting a single home, at the cost of putting a refactor in front of a
   filed defect. The order above keeps the defect first; swapping the two is defensible and changes
