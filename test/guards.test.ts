@@ -288,6 +288,35 @@ function exportPaths(value: unknown): string[] {
   return Object.values(value as Record<string, unknown>).flatMap((nested) => exportPaths(nested))
 }
 
+/** How far a line is indented, which is what separates one YAML node from the next here. */
+function indentOf(line: string): number {
+  return line.length - line.trimStart().length
+}
+
+/**
+ * The lines of the YAML step that contains `at`.
+ *
+ * A step ends where the indentation falls back to the step's own level: the next `- ` item,
+ * or the next job's first key. Stopping at the next `- ` alone is not enough — it sweeps up
+ * every key of the job below, so a condition on *that* job reads as a condition on this step
+ * and a valid workflow fails this suite. A blank line and a comment end nothing, because
+ * neither is a YAML node: skipping them keeps a step's own keys in one slice, while an `if:`
+ * indented inside the step is still inside it.
+ */
+function stepLines(workflow: string[], at: number): string[] {
+  let start = at
+  while (start > 0 && !/^\s*- /.test(workflow[start])) start -= 1
+  const indent = indentOf(workflow[start])
+  let end = at
+  for (let index = at + 1; index < workflow.length; index += 1) {
+    const line = workflow[index]
+    if (line.trim() === '' || line.trimStart().startsWith('#')) continue
+    if (indentOf(line) <= indent) break
+    end = index
+  }
+  return workflow.slice(start, end + 1)
+}
+
 /* ------------------------------------------------------------ the subjects -- */
 
 /** Every TypeScript source in the repository, wherever it lives. */
@@ -565,13 +594,37 @@ await check('the declared Node floor is the one CI runs', async () => {
   assert.ok(testStepAt > 0, 'CI must run `npm test`')
   // The whole step, not just the lines above `run:`: YAML keys are unordered, so an `if:`
   // below the command is the same skip as one above it.
-  let stepAt = testStepAt
-  while (stepAt > 0 && !/^\s*- /.test(workflow[stepAt])) stepAt -= 1
-  let stepEnd = testStepAt
-  while (stepEnd + 1 < workflow.length && !/^\s*- /.test(workflow[stepEnd + 1])) stepEnd += 1
   assert.ok(
-    !workflow.slice(stepAt, stepEnd + 1).some((line) => /^\s*if:/.test(line)),
+    !stepLines(workflow, testStepAt).some((line) => /^\s*if:/.test(line)),
     'the step that runs `npm test` must not be conditional: a skipped leg installs the floor Node and tests nothing on it',
+  )
+
+  // The boundary that slice depends on cannot be observed on a workflow that is correct, so
+  // it is pinned against a fixture: the job below carries a condition, and it must not be
+  // read as one on this step. The second assertion is what keeps the first honest — a scan
+  // that returned nothing at all would pass it, so an `if:` inside the step has to be found.
+  const workflowFixture = (insideStep: string[] = []) => [
+    'jobs:',
+    '  suites:',
+    '    steps:',
+    '      - name: Offline suites and repository checks',
+    '        run: npm test',
+    ...insideStep,
+    '  typecheck:',
+    '    if: github.event.ref == \'refs/heads/main\'',
+    '    steps:',
+    '      - name: Type-check the whole repository',
+    '        run: npm run typecheck',
+  ]
+  const fixtureAt = workflowFixture().findIndex((line) => /^\s*run:\s+npm test\s*$/.test(line))
+  assert.ok(fixtureAt > 0, 'the fixture must contain the step it makes a claim about')
+  assert.ok(
+    !stepLines(workflowFixture(), fixtureAt).some((line) => /^\s*if:/.test(line)),
+    'a condition on the job after the `npm test` step must not be read as a condition on the step',
+  )
+  assert.ok(
+    stepLines(workflowFixture(['        if: false']), fixtureAt).some((line) => /^\s*if:/.test(line)),
+    'a condition inside the step that runs `npm test` must still be found',
   )
 })
 

@@ -155,8 +155,10 @@ identical.
 not listed: every `.ts` file in the tree outside `dist/`, `node_modules/`, `.git/` and `.worktrees/`, so
 a source that appears in a new directory is guarded the moment it lands. It parses `package.json`,
 `tsconfig.json`, `tsconfig.check.json` and `.github/workflows/ci.yml` the same way — as text — and
-asserts seven properties of the whole. No fixture and no child process; the only thing it borrows is the
-build, for the case that checks what `exports` and `files` name.
+asserts seven properties of the whole. No child process, and one in-memory fixture — a miniature workflow
+inside the Node-floor case — which exists because the boundary that case depends on cannot be observed on
+a workflow that is correct. The only thing it borrows from the build is the case that checks what
+`exports` and `files` name.
 
 **What it proves.** The properties this repository depends on to run at all, none of which a behavioural
 suite can observe, because all seven fail *silently* in normal use: a file that stops surviving Node's
@@ -182,15 +184,20 @@ alias deep and requires a segment that actually *runs* the file — `echo skippe
 it without running it — and separately requires the live suite to stay out of `npm test` itself.
 `the declared Node floor is the one CI runs` asserts the shape, not a string: the floor is a matrix entry
 with an `os`, the comment naming whose floor it is sits with that leg, and no line of the step running
-`npm test` carries an `if:`, so the floor cannot be installed and skipped.
+`npm test` carries an `if:`, so the floor cannot be installed and skipped. That step is read whole — YAML
+keys are unordered, so an `if:` below the command skips it just the same — and it is bounded by its own
+indentation, so a condition on the job that follows is not read as a condition on this one.
 
-**Where it deliberately stops.** Three boundaries are named rather than silent. A hand-written `client.js`
+**Where it deliberately stops.** Four boundaries are named rather than silent. A hand-written `client.js`
 at the repository root is allowed, because the README documents it there as the settings page the Harness
 bundles — a source, not compiled output; a `.js` beside a `.ts` twin, or nested anywhere outside `dist/`,
 is not. A `.tsx` or `.jsx` source cannot be executed by Node's type stripper at all, so this suite does
 not claim to cover one; the day the settings page adds such a file, the bounds of this suite change
-deliberately rather than quietly. And a `.ts` file in a directory nothing else polices is still scanned,
-which is the point of discovering subjects instead of listing them.
+deliberately rather than quietly. The import scan reads comment-stripped text rather than a syntax tree,
+so a specifier spelled inside an ordinary string is read as an import — no file here writes a real
+specifier that way, and the alternative is a parser this suite does not need. And a `.ts` file in a
+directory nothing else polices is still scanned, which is the point of discovering subjects instead of
+listing them.
 
 **Why it is not a behaviour suite.** Each of the seven cases describes the *repository*, not the plugin,
 so its mechanism is a file read and its failure is a report naming the file. Every case was verified the
