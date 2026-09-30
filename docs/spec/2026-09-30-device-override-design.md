@@ -115,8 +115,8 @@ no overrides", which is the state every device is in today.
 
 **Where this stops, and what v1 therefore claims.** The environment anchor makes a tracked `stateDir`
 recoverable: the override file is found even when that value is another machine's, and the value is then
-canonicalised and localized like any other. Two of the other values are not recoverable, and pretending
-otherwise would be the kind of claim this repository refuses:
+canonicalised and localized like any other. The other three values are not recoverable, for the two reasons
+below, and pretending otherwise would be the kind of claim this repository refuses:
 
 | Tracked value | Why v1 cannot self-recover it |
 | --- | --- |
@@ -244,7 +244,7 @@ The call sites, all in `lib/core.ts` and all before `hashFiles` sees anything:
 | `profileStatus` | `localHash` becomes `hashFiles(canonicaliseFiles(files))`. The remote hash, `restorable` and the vocabulary's existing names are unchanged — the baseline in `state.json` is a canonical hash from now on, and it is paired with the declaration fingerprint described below, which is what adds the vocabulary's one new name. |
 | `uploadProfile` | Canonicalise immediately after `collectProfile`; the canonical map is what `gistPatch`/`gistCreate` publish **and** what `lastSyncedHash` records, together with the fingerprint of the declaration that produced it. `missing`, `lost`, `pruned` and `dropped` decide on names and are unaffected. The applications from that canonicalisation are the result's `overrides`. |
 | `downloadProfile` | `localHash` in the safety comparison becomes the canonical local hash, and so does the content `localIsSubsetOfRemote` compares — that function tests content, not names, so without it a device whose only local difference is its own override would be asked for `force` for no reason. The map handed to `commitTrackedFiles` is `localizeFiles(remoteFiles)`, and `lastSyncedHash` stays `hashFiles(remoteFiles)`, which is already canonical, recorded with the fingerprint of the declaration that localized the bytes. A substitution that refuses throws before `commitTrackedFiles` is called, so nothing is staged, nothing is renamed and no baseline moves. The applications from the localization are the result's `overrides`. |
-| `syncProfile` | Its composition is untouched: it keeps composing the three above through `profileStatus`, so it inherits the behaviour, including the `missing-local` and `remote-ahead` paths. It gains a case for `override-changed`, and it reports the applications of the operation it actually ran rather than of the status it read before running it. |
+| `syncProfile` | Its composition is untouched: it keeps composing the three above through `profileStatus`, so it inherits the behaviour, including the `missing-local` and `remote-ahead` paths. It gains a case for `override-changed`, which replaces the baseline rows when the declaration changed and never suppresses `missing-local`, and it reports the applications of the operation it actually ran rather than of the status it read before running it. |
 
 `force` is not a way past a broken override. It means "overwrite local files"; it is not a statement that
 the override file may be wrong, so a substitution that refuses fails the operation whatever `force` says,
@@ -268,6 +268,11 @@ means the file already held the canonical one. The tool's `render` prints one li
 overridden locally: package.json — override #1 (applied)
 overridden locally: cordis.patch.yml — override #2 (already canonical)
 ```
+
+A declaration that differs from the recorded one is not an application, so it is a field of its own: the row
+carries `overrideChanged` and the report prints one line saying the override set changed and that an upload
+would publish this device's raw values. It is printed on every status where it is true, including the early
+paths that never reach the baseline comparison.
 
 `canonical` and `local` are deliberately absent from the shape and never appear in tool text. Nothing in
 the override format bounds what a value may be — a `cordis.patch.yml` row is a plausible place for a token,
@@ -319,13 +324,30 @@ under?" on this device, and a later change to the digest costs one re-baseline r
 record that predates the field reads as `null`, which is correct — before this feature, no device had a
 declaration.
 
-`profileStatus` compares the fingerprint before it classifies:
+`profileStatus` compares the fingerprint **where the recorded baseline is consulted**, not before the whole
+classification. Every existing short-circuit keeps the precedence it has today: no recorded gist is
+`untracked` or `missing-local`, a failed gist read is `unreachable` or `missing-gist`, and `restorable` is
+`missing-local` before any hash is compared. That last one matters for a device that has just lost its
+declaration: the gist may hold the only remaining copy of a tracked file, and restoring it must not wait on
+the override file. The fingerprint decides the rows that read the baseline:
 
 | Current fingerprint vs. recorded | Hashes | Status |
 | --- | --- | --- |
 | equal | any | Today's classification, unchanged. |
 | different, including `null` against an entry set | `localHash === remoteHash` | `in-sync`, and the baseline **and** the fingerprint are repaired together under the state lock, compare-and-set exactly as the existing stale-baseline repair already does. This is the enable case: adding an override to a device whose file already holds the canonical text changes no bytes and must not read as a change. |
 | different | `localHash !== remoteHash` | **`override-changed`** — the one new name in the vocabulary. The two sides disagree, and the recorded baseline was taken under a different declaration, so neither "the local side moved" nor "the remote side moved" is a statement this design is entitled to make. |
+
+Two boundaries follow, and naming them is what keeps the early paths exactly as they are:
+
+- **`missing-local` wins.** A declaration that changed cannot turn a restorable profile into a refusal;
+  the restore runs and applies direction *in* with whatever declaration exists now. The *baseline* rows are
+  what `override-changed` replaces: `local-ahead` would otherwise upload this device's raw values,
+  `remote-ahead` would fast-forward on a baseline taken under a different declaration, and a profile with no
+  recorded baseline would read `diverged` instead of naming the declaration that actually moved.
+- **A changed declaration is never silent.** Whenever the fingerprint differs from the recorded one — on an
+  early path as much as on the baseline rows — the row carries `overrideChanged` and the report says so, so
+  a device that lost its override file is told even when the status that wins (`missing-local`,
+  `unreachable`) does not mention it.
 
 `override-changed` is not `diverged`: the difference is known to be the declaration rather than the
 content, and the message says so. `syncProfile` handles it the way it handles `diverged` — without `force`
@@ -353,6 +375,10 @@ The lifecycle, case by case:
 `uploadProfile` and `downloadProfile` record the fingerprint of the declaration they actually applied, in
 the same locked write that records `lastSyncedHash`. `profileStatus`'s repair writes it in the same
 compare-and-set, so a concurrent writer that advanced the record is still left alone.
+
+Each lifecycle row assumes the gist is readable and no tracked file is missing locally. When either of those
+is not true, the existing status wins — `unreachable`, `missing-gist` or `missing-local` — and the row still
+carries `overrideChanged`, because the declaration moved even though a different status is the headline.
 
 ## What is refused
 
@@ -384,11 +410,14 @@ verb paths already have:
 - A **named** profile request (`gist_status <profile>`) keeps failing loudly rather than becoming a row.
   There is no other profile in that call to protect, and the caller asked about this one.
 
-The failure row is `{ profile, status: 'failed', error }`, printed the way the other tools already print a
-per-profile failure (`<profile>: FAILED - <message>`), so one bulk report never hides a broken profile and
-never loses the other rows. With no override file present this moves no file bytes and changes no
-successful path's text; the one difference is that a profile which already throws in a bulk status is
-reported as a row instead of taking the report down, which is what the verb tools have done all along.
+The failure row is `{ profile, status: 'failed', error }`. `'failed'` joins `StatusRow`'s vocabulary and
+`STATUS_LABEL`, so a bulk report prints it in the report's own shape — the profile, then
+`status: FAILED` with the message on the existing `error:` line — rather than borrowing the verb tools'
+`<profile>: FAILED - <message>` line, which `formatStatusReport` does not produce. One bulk report therefore
+never hides a broken profile and never loses the other rows. With no override file present this moves no
+file bytes and changes no successful path's text; the one difference is that a profile which already throws
+in a bulk status is reported as a row instead of taking the report down, which is what the verb tools have
+done all along.
 
 ## Alternatives considered
 
@@ -503,15 +532,16 @@ Task 6 implements this; the list is here so the spec is the whole decision.
 - **New suite `test/overrides.test.ts`.** The refusal surface is a table of cases of its own and does not
   belong in `test/safety.test.ts`, which is already the repository's largest; the substitution rule and
   both directions belong beside them, including the containment cases the occurrence rule turns on (a
-  `local` that is a prefix of `canonical`, and the reverse). `test/sync.test.ts`, `test/tools.test.ts` and
-  `test/regression.test.ts` gain the cases the roadmap's Task 6 lists, and the lifecycle table's eight rows
-  are the regression cases for the fingerprint.
+  `local` that is a prefix of `canonical`, and the reverse). `test/sync.test.ts`, `test/tools.test.ts`,
+  `test/safety.test.ts` and `test/regression.test.ts` gain the cases the roadmap's Task 6 lists, and the
+  lifecycle table's eight rows are the regression cases for the fingerprint.
 - **The state file and the vocabulary move.** `ProfileRecord` gains the optional `overrideFingerprint`;
   `ProfileStatusName` gains `override-changed` (nine names, not eight); `ProfileStatus` and the three
-  result types gain `overrides`; `statusAll` gains a `StatusFailure` row. `STATE_VERSION` stays `1`,
-  because every addition is optional and a record without the fingerprint reads as "no declaration". The
-  tool layer's label map is a `Record` over the names, so the compiler — not a test — is what refuses to
-  let the new row print as a raw string.
+  result types gain `overrides`; `ProfileStatus` and the results also carry `overrideChanged`;
+  `statusAll` gains a `StatusFailure` row and the tool layer gains the `'failed'` row status in `StatusRow`
+  and `STATUS_LABEL`. `STATE_VERSION` stays `1`, because every addition is optional and a record without the
+  fingerprint reads as "no declaration". The label map is a `Record` over the names, so the compiler — not a
+  test — is what refuses to let either new row print as a raw string.
 - **`test/guards.test.ts` needs no edit**, and that is the check worth noting: it discovers every `.ts`
   file, so the new module and the new suite are covered the moment they land — strippability, import
   targets, and the case that fails if a suite is not reachable from the `test` chain. The chain entry in
@@ -520,8 +550,11 @@ Task 6 implements this; the list is here so the spec is the whole decision.
   eleven and "nine offline suites" becomes ten, in `AGENTS.md`, `CONTRIBUTING.md` (whose per-suite table
   gains the new suite and its cases), both READMEs, `docs/index.md`, `docs/contributor/testing.md`,
   `docs/contributor/index.md`, `docs/contributor/architecture.md`, `docs/contributor/development.md` and
-  `docs/contributor/release-process.md`; the offline case total moves with them. `AGENTS.md`'s code map
-  also carries the status count, so "the eight statuses a profile can report" becomes nine.
+  `docs/contributor/release-process.md`; the offline case total moves with them. `CHANGELOG.md` carries the
+  same total in its `[Unreleased]` entry, which is still unfrozen while Task 3 can run alongside this one —
+  Task 6's own entry states the new count, and whichever task freezes the section must not freeze a stale
+  one. `AGENTS.md`'s code map also carries the status count, so "the eight statuses a profile can report"
+  becomes nine.
 - **Documentation**: `README.md` and `README.zh-CN.md` (configuration table, both languages),
   `docs/user/reference/configuration.md`, `docs/user/reference/recovery.md` (what `force` may and may not
   cross: a changed declaration, never a refused one), `docs/user/reference/tools.md` (the status table,

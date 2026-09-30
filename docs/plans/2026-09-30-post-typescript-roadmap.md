@@ -366,13 +366,17 @@ template's commented block), `CHANGELOG.md`.
 - [ ] **Step 8: Pair the baseline with the declaration that produced it**
 
   `ProfileRecord` gains the fingerprint of the override declaration each `lastSyncedHash` was recorded
-  under, written in the same locked write as the hash itself. A declaration that differs from the
-  recorded one is never classified as an ordinary `local-ahead`: when the two sides already agree the
-  baseline and fingerprint are re-recorded together (the stale-baseline repair, extended), and when they
-  do not the profile reads `override-changed`, which `gist_sync` refuses without `force`. The lifecycle
-  table in the spec — enable, disable, a lost file, an edited entry, a local-only edit and a stale
-  baseline — is the case list, and it must include the transition the fingerprint exists for: with the
-  override file removed and the local file still holding its own path, a sync uploads nothing.
+  under, written in the same locked write as the hash itself. The fingerprint gates the rows that read the
+  baseline, not the whole classification: `untracked`, `missing-local`, `missing-gist` and `unreachable`
+  keep their existing precedence, and a restorable profile stays `missing-local` because the gist may hold
+  the only copy. A declaration that differs from the recorded one is never classified as an ordinary
+  `local-ahead` or `remote-ahead`: when the two sides already agree the baseline and fingerprint are
+  re-recorded together (the stale-baseline repair, extended), and when they do not the profile reads
+  `override-changed`, which `gist_sync` refuses without `force`. Any row whose declaration moved carries
+  `overrideChanged` and says so, even when another status is the headline. The lifecycle table in the spec —
+  enable, disable, a lost file, an edited entry, a local-only edit and a stale baseline — is the case list,
+  and it must include the transition the fingerprint exists for: with the override file removed and the
+  local file still holding its own path, a sync uploads nothing.
 
 - [ ] **Step 9: Isolate a failing profile in the bulk status reports**
 
@@ -380,8 +384,10 @@ template's commented block), `CHANGELOG.md`.
   `syncAll` already uses for the verbs, push `{ profile, status: 'failed', error }` and report the
   remaining profiles. This is not override-specific: `collectProfile` can already throw today, so the two
   status paths are the only bulk operations without the isolation the verb paths have, and a refused
-  override is a second way in. A named-profile call still fails loudly. No file bytes move either way,
-  which is what keeps Step 6's bar.
+  override is a second way in. A named-profile call still fails loudly. `'failed'` is a row status, so it
+  joins `StatusRow` and `STATUS_LABEL` and prints in `formatStatusReport`'s own shape with the message on
+  the `error:` line, not the verb tools' `FAILED -` line. No file bytes move either way, which is what keeps
+  Step 6's bar.
 
   Run: `npm test && npm run typecheck`
   Expected: green, with the new cases and every count updated.
