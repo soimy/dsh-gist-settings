@@ -267,8 +267,10 @@ each option has a failure mode that matters:
 
 Two smaller decisions belong to the same spec, because implementing them twice is the cost of
 getting them wrong: where the override file lives (a directory of per-profile files outside every profile,
-discovered from the environment so that a tracked `stateDir` cannot hide the file that localizes it, is
-device-local by construction; a single file named by the config row is *not* per-profile, and a
+discovered from the environment so that a tracked `stateDir` cannot hide the file that localizes it, and
+validated on real paths against the profile it describes before it is used — the environment names the
+directory, so "device-local by construction" needs that check; a single file named by the config row is
+*not* per-profile, and a
 key inside the plugin's own `cordis.patch.yml` row is uploaded and restored on the other device,
 which is the circularity the issue describes), and where canonicalisation sits (before `hashFiles`,
 never inside it).
@@ -317,14 +319,21 @@ template's commented block), `CHANGELOG.md`.
 - [ ] **Step 1: Load and validate the override file**
 
   Device-local, never tracked, never uploaded, and discovered from the environment rather than from
-  `config.stateDir` or `config.dshHome`, for the reason the spec gives. Unknown top-level keys, a
-  version this reader does not know, a target file that is not in `profileFiles`, an entry that is not a
-  `canonical`/`local` pair of non-empty differing strings, a literal that is absent from the file, a
-  literal that occurs more than once, both spellings present after the spec's containment discount, and
-  two entries whose spans overlap are all refused with the file and the entry in the message — the
-  existing "refuse rather than guess" stance, so a typo cannot look like a working sync. There is no key
-  to name: a text locator has no keys, and the key-level vocabulary belongs to the deferred `path`
-  locator.
+  `config.stateDir` or `config.dshHome`, for the reason the spec gives. The resolved path is validated
+  before anything is read, on real paths and not on the environment variable's spelling, because the
+  anchor is not a guarantee: refuse when `<overridesDir>/<profile>.json` resolves to the profile directory
+  or inside it, when it is the same real file as one of that profile's tracked targets or as `state.json`,
+  or when one of the profile's tracked targets is the same real file as another profile's override file.
+  Case-fold where the tracked-name collision check already does. This is the check that makes "outside
+  every profile directory" true rather than assumed, so it is a refusal and never a silent "no overrides".
+
+  Then, on the declaration itself: unknown top-level keys, a version this reader does not know, a target
+  file that is not in `profileFiles`, an entry that is not a `canonical`/`local` pair of non-empty differing
+  strings, a literal that is absent from the file, a literal that occurs more than once, both spellings
+  present after the spec's containment discount, and two entries whose spans overlap are all refused with
+  the file and the entry in the message — the existing "refuse rather than guess" stance, so a typo cannot
+  look like a working sync. There is no key to name: a text locator has no keys, and the key-level
+  vocabulary belongs to the deferred `path` locator.
 
 - [ ] **Step 2: Canonicalise on the way out**
 
@@ -344,12 +353,19 @@ template's commented block), `CHANGELOG.md`.
   `profileStatus` hashes canonical content on both sides, and the status row and tool results name
   what was overridden (`overridden locally: package.json — override #1 (applied)`). A file that differs
   on disk from the gist must never be reported as plain `in sync` without that
-  explanation, and the canonical and local values never appear in tool text.
+  explanation, and the canonical and local values never appear in tool text. A `restored` sync runs a
+  download and then an upload, so its result carries the union of both stages' applications, deduplicated
+  by `file` and `entry` with `applied` true when either stage applied it — the file the download could not
+  localize is the file the upload canonicalises before publishing.
 
 - [ ] **Step 5: Prove the override file cannot enter the round trip**
 
   It is not uploaded, not pruned by an upload, not counted as a tracked file, not restored by a
-  download, and not backed up or rolled back as profile content. Each of those is its own case.
+  download, and not backed up or rolled back as profile content. Each of those is its own case, and the
+  location refusals are cases of their own too: `DSH_GIST_OVERRIDES_DIR` naming the profile directory, an
+  override file that is a symlink or junction onto a tracked target, one that is the state file, and a
+  tracked target that is another profile's override file. Without those four, the "cannot enter the round
+  trip" case passes while the guarantee is false.
 
 - [ ] **Step 6: Prove the no-override path is byte-identical**
 
@@ -517,13 +533,16 @@ be guessing:
   and will not add one — and a second argument turned out to be the sharper one: a re-serialised
   canonical form cannot equal the bytes a device without an override uploaded verbatim, so `in-sync`
   would be unreachable for exactly the mixed fleet the feature exists for. The structured per-key reader
-  is deferred, with its shape and its trigger written down, rather than rejected. Three consequences the
+  is deferred, with its shape and its trigger written down, rather than rejected. Four consequences the
   spec review forced into the open travel with it, and Task 6 implements them: the override file
   is discovered from the environment rather than under `stateDir`, because `stateDir` is one of the values
-  the file exists to localize; the recorded baseline is paired with a fingerprint of the declaration it
+  the file exists to localize — and because an environment variable is a name, not a guarantee, the
+  resolved path is validated on real paths against the profile it describes before it is used; the
+  recorded baseline is paired with a fingerprint of the declaration it
   was taken under, so a deleted override file cannot turn into an automatic upload of this device's raw
-  path; and a refusal is isolated per profile in both bulk status paths, which today have no per-profile
-  catch at all.
+  path; a refusal is isolated per profile in both bulk status paths, which today have no per-profile
+  catch at all; and a `restored` sync reports the union of its download and upload applications rather
+  than only the first stage's.
 - **How far v1 reaches into runtime configuration.** *Settled by the same spec:* the declaration covers
   `ghPath`, `dshHome`, `profilesDir` and `stateDir` like any other text, but only `stateDir` is
   self-recovering after another device's copy lands here. `dshHome`, `profilesDir` and `ghPath` decide

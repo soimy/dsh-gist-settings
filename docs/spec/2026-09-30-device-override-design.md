@@ -96,9 +96,10 @@ the path that finds the override file does not depend on any value the override 
 
 Four properties follow from that location, and each is a requirement rather than a coincidence:
 
-- It is **outside every profile directory**, so `collectProfile` cannot read it, `profileFiles` cannot
-  name it, the upload prune step cannot remove it (pruning decides on gist file names not in
-  `trackedNames`), and no backup or rollback touches it.
+- It is **outside every profile directory** — checked, not assumed, because the environment decides the
+  path. Given that, `collectProfile` cannot read it, `profileFiles` cannot name it, the upload prune step
+  cannot remove it (pruning decides on gist file names not in `trackedNames`), and no backup or rollback
+  touches it. The check that makes the first clause true is below.
 - It is **derived**, not configured, and it is not tracked. A config key such as `overridesFile` would
   have to hold an absolute path — and the config row lives in the profile's own `cordis.patch.yml`, which
   is tracked, so that path would be uploaded and restored on the other device. That is the same
@@ -112,6 +113,35 @@ Four properties follow from that location, and each is a requirement rather than
 
 The plugin never creates the directory. An absent directory or an absent file means "this device declares
 no overrides", which is the state every device is in today.
+
+**The location is validated, not trusted.** Naming a directory in the environment is not a guarantee about
+where the resulting file lands — someone can point `DSH_GIST_OVERRIDES_DIR` at a profile directory — so the
+plugin resolves `<overridesDir>/<profile>.json` and refuses the operation when any of these holds:
+
+| Condition | Why it is not guessed at |
+| --- | --- |
+| The resolved override file is the profile directory itself, or lies inside it | It would be profile content after all: a tracked name of the same spelling would be read by `collectProfile`, published by an upload and replaced by a download. |
+| The resolved override file is the same real file as one of that profile's tracked targets | A string comparison cannot see a symlink or a junction, and real identity is what the read and write paths actually follow. |
+| The resolved override file is the same real file as `state.json` | The plugin's own record is not a declaration. A profile named `state` with the overrides directory pointed at the state directory would otherwise parse that record and refuse every operation for a reason nothing names. |
+| One of that profile's tracked targets is the same real file as `<overridesDir>/<name>.json` for any name `listKnownProfiles` returns | The symmetric half: this profile's **upload** would publish some device's declaration, which is the same leak entered from the other side. This one is checked whenever the tracked set is collected, not only when the operated profile has an override file of its own. |
+
+Three properties of the check matter as much as its conditions:
+
+- **It runs on real paths, at every operation.** Not on the environment variable's spelling and not on the
+  config value's: the anchor cannot be trusted either, since `DSH_HOME` can name a path inside a profile
+  exactly as `DSH_GIST_OVERRIDES_DIR` can. It uses the machinery the profile and tracked-file containment
+  already uses — `realpathAllowingMissing`, then the `path.relative` test `assertContained` performs —
+  because that is the same grade of check the rest of the plugin applies to a path it did not choose.
+- **It refuses rather than skips.** A path that fails is an error naming the override file and the profile,
+  never a silent "this device declares no overrides", which is the branch this whole design exists to keep
+  out of.
+- **It case-folds where the tracked-name collision check already case-folds.** On Windows and macOS
+  `Foo.json` and `foo.json` are one file, so the identity comparison follows `assertNoCaseCollision`'s
+  rule rather than leaving two spellings that only a byte comparison would call different.
+
+The identity condition is implied by the first one plus the tracked-file containment the read path already
+applies, and it is stated and checked anyway: it is the property the writers depend on, and it should not
+quietly become false if that containment ever moves.
 
 **Where this stops, and what v1 therefore claims.** The environment anchor makes a tracked `stateDir`
 recoverable: the override file is found even when that value is another machine's, and the value is then
@@ -244,7 +274,7 @@ The call sites, all in `lib/core.ts` and all before `hashFiles` sees anything:
 | `profileStatus` | `localHash` becomes `hashFiles(canonicaliseFiles(files))`. The remote hash, `restorable` and the vocabulary's existing names are unchanged — the baseline in `state.json` is a canonical hash from now on, and it is paired with the declaration fingerprint described below, which is what adds the vocabulary's one new name. |
 | `uploadProfile` | Canonicalise immediately after `collectProfile`; the canonical map is what `gistPatch`/`gistCreate` publish **and** what `lastSyncedHash` records, together with the fingerprint of the declaration that produced it. `missing`, `lost`, `pruned` and `dropped` decide on names and are unaffected. The applications from that canonicalisation are the result's `overrides`. |
 | `downloadProfile` | `localHash` in the safety comparison becomes the canonical local hash, and so does the content `localIsSubsetOfRemote` compares — that function tests content, not names, so without it a device whose only local difference is its own override would be asked for `force` for no reason. The map handed to `commitTrackedFiles` is `localizeFiles(remoteFiles)`, and `lastSyncedHash` stays `hashFiles(remoteFiles)`, which is already canonical, recorded with the fingerprint of the declaration that localized the bytes. A substitution that refuses throws before `commitTrackedFiles` is called, so nothing is staged, nothing is renamed and no baseline moves. The applications from the localization are the result's `overrides`. |
-| `syncProfile` | Its composition is untouched: it keeps composing the three above through `profileStatus`, so it inherits the behaviour, including the `missing-local` and `remote-ahead` paths. It gains a case for `override-changed`, which replaces the baseline rows when the declaration changed and never suppresses `missing-local`, and it reports the applications of the operation it actually ran rather than of the status it read before running it. |
+| `syncProfile` | Its composition is untouched: it keeps composing the three above through `profileStatus`, so it inherits the behaviour, including the `missing-local` and `remote-ahead` paths. It gains a case for `override-changed`, which replaces the baseline rows when the declaration changed and never suppresses `missing-local`. It reports the applications of every transformation it ran — so the `restored` path, which downloads and then uploads, merges both stages — rather than of the status it read before running any of them. |
 
 `force` is not a way past a broken override. It means "overwrite local files"; it is not a statement that
 the override file may be wrong, so a substitution that refuses fails the operation whatever `force` says,
@@ -291,10 +321,14 @@ ran reports them. Nothing is derived from a status that was computed for another
 - `profileStatus` reports the applications from the canonicalisation behind `localHash`.
 - `uploadProfile` reports the applications from the canonicalisation of the payload it published.
 - `downloadProfile` reports the applications from the localization of the bytes it committed.
-- `syncProfile` runs one of the three and reports *that* operation's list; for `noop` it reports the
-  status' list, because nothing was transformed. It cannot report the status' list for a forced upload:
-  an `in-sync` status carries the "already canonical" list, while the upload that follows `force`
-  substitutes.
+- `syncProfile` reports the applications of **every** transformation it ran, not a single operation's list.
+  For `noop` that is the status' list, because nothing was transformed. A forced upload reports the
+  upload's list, not the `in-sync` status' "already canonical" list. Its `restored` path is the one that
+  composes two operations — `downloadProfile` keeps local files the gist does not carry, then
+  `uploadProfile` republishes them — and the file the download had nothing to localize is exactly the file
+  the upload canonicalises before publishing. That result therefore carries the **union** of both stages'
+  applications, deduplicated by `file` and `entry`, with `applied` true when either stage applied it. A
+  declaration that affected the published bytes is never dropped because the other stage had no span for it.
 - `UploadResult`, `DownloadResult` and `SyncResult` gain `overrides`, and `gist_status` reads the field on
   `ProfileStatus`. Direct upload and download never call `profileStatus` today and do not start: each is a
   single direction, and a remote read they do not need would be cost with no answer in it.
@@ -382,8 +416,9 @@ carries `overrideChanged`, because the declaration moved even though a different
 
 ## What is refused
 
-Every refusal names the override file and the offending entry, and nothing is written and no baseline
-moves:
+A refusal has two sources: the file's **location**, which "The override file" above states, and the
+declaration's own surface below. Every content refusal names the override file and the offending entry, and
+nothing is written and no baseline moves:
 
 | Condition | Why it is not guessed at |
 | --- | --- |
@@ -477,7 +512,7 @@ criterion at the literal level for v1.
 | --- | --- |
 | 1. A Linux device with the override reports `in sync`, downloads without `force`, and leaves the gist's value untouched | Canonical hashes on both sides; direction *in* on the staged bytes; direction *out* on the upload payload. Task 6 Step 7 walks it end to end. |
 | 2. A → B → A converges with no `force` and no stale baseline | The baseline is a canonical hash on both devices, so a round trip is a no-op on the second pass. |
-| 3. The override file is never uploaded, pruned or counted as a tracked file | It lives outside the profile directory; `profileFiles`, the prune step and the backup walk cannot reach it. One case each. |
+| 3. The override file is never uploaded, pruned or counted as a tracked file | It lives outside the profile directory, and "The override file" validates that on real paths rather than trusting the anchor; `profileFiles`, the prune step and the backup walk cannot reach it. One case each, plus the location refusals. |
 | 4. The tools name what was overridden | `ProfileStatus.overrides` plus the rendered `overridden locally:` line; `applied` distinguishes a substitution from a file that already agreed. The line names the file and the entry's position, never the values. |
 | 5. A missing target or a wrong shape fails with the file and the key in the message, writing nothing | At v1's literal level: a wrong entry shape is refused at load, and a literal that is absent, ambiguous or conflicting is refused with the file and the entry, before anything is staged, so a download's commit never starts. "The key" arrives with the deferred `path` locator, not before — see below. |
 | 6. Behaviour is byte-identical when no override file exists | No file → no overrides and a `null` fingerprint → the map passed to `hashFiles` and to the writers is the map read from disk, unchanged, and the fingerprint comparison is between two `null`s. The one deliberate widening is the bulk-status isolation above, which needs no override file to trigger and moves no bytes either way. |
@@ -496,12 +531,17 @@ profiles' status rows down with it ("What is refused").
 
 ## Safety properties that come for free
 
-Worth recording, because they are the reason the location and not the code does the work: the override
-file is not in the profile directory, so the containment walk (`resolveTrackedFile`), the tracked-name
-validator (`normalizeTrackedName`), the atomic commit (`commitTrackedFiles`), the backup and rollback
-paths, and the gist prune step all keep their current guarantees without a special case. The one new path
-that touches bytes is the substitution, and it runs on content that is already in memory — on the way out
-before anything is sent, on the way in before anything is staged.
+Worth recording, because they are the reason the location and not the code does the work: once the location
+check above has established that the override file is outside the profile, the containment walk
+(`resolveTrackedFile`), the tracked-name validator (`normalizeTrackedName`), the atomic commit
+(`commitTrackedFiles`), the backup and rollback paths, and the gist prune step all keep their current
+guarantees without a special case. The one new path that touches bytes is the substitution, and it runs on
+content that is already in memory — on the way out before anything is sent, on the way in before anything is
+staged.
+
+That check is the price of the environment anchor, and it is one check: `<stateDir>/overrides/` inherited the
+"outside every profile" property from the value it was derived from, while a name the user sets in the
+environment has to be verified against the profile it is about to describe.
 
 ## Out of scope
 
@@ -532,8 +572,13 @@ Task 6 implements this; the list is here so the spec is the whole decision.
 - **New suite `test/overrides.test.ts`.** The refusal surface is a table of cases of its own and does not
   belong in `test/safety.test.ts`, which is already the repository's largest; the substitution rule and
   both directions belong beside them, including the containment cases the occurrence rule turns on (a
-  `local` that is a prefix of `canonical`, and the reverse). `test/sync.test.ts`, `test/tools.test.ts`,
-  `test/safety.test.ts` and `test/regression.test.ts` gain the cases the roadmap's Task 6 lists, and the
+  `local` that is a prefix of `canonical`, and the reverse), and the location refusals are a table of cases of
+  their own: the overrides directory naming the profile directory, an override file that is a symlink or
+  junction onto a tracked target, one that is the state file, and a tracked target that is another
+  profile's override file. Each makes the "cannot enter the round trip" claim false in a different way, and
+  none is reachable from a declaration-shaped fixture. `test/sync.test.ts`, `test/tools.test.ts`,
+  `test/safety.test.ts` and `test/regression.test.ts` gain the cases the roadmap's Task 6 lists — including
+  the `restored` union, which needs a gist that lacks a tracked file the device still holds — and the
   lifecycle table's eight rows are the regression cases for the fingerprint.
 - **The state file and the vocabulary move.** `ProfileRecord` gains the optional `overrideFingerprint`;
   `ProfileStatusName` gains `override-changed` (nine names, not eight); `ProfileStatus` and the three
@@ -556,10 +601,12 @@ Task 6 implements this; the list is here so the spec is the whole decision.
   one. `AGENTS.md`'s code map also carries the status count, so "the eight statuses a profile can report"
   becomes nine.
 - **Documentation**: `README.md` and `README.zh-CN.md` (configuration table, both languages),
-  `docs/user/reference/configuration.md`, `docs/user/reference/recovery.md` (what `force` may and may not
-  cross: a changed declaration, never a refused one), `docs/user/reference/tools.md` (the status table,
-  the new name, the per-profile failure row, and the `overridden locally:` line), the commented template in
-  `cordis.patch.yml` (where the file lives — no new key), `docs/contributor/architecture.md` (the module,
-  the classification and action tables, the state field), `docs/contributor/testing.md` (the new suite and
+  `docs/user/reference/configuration.md` (the override file's shape, `DSH_GIST_OVERRIDES_DIR` and the two
+  fallback anchors, and the location refusals a user can trigger), `docs/user/reference/recovery.md` (what
+  `force` may and may not cross: a changed declaration, never a refused one), `docs/user/reference/tools.md`
+  (the status table, the new name, the per-profile failure row, and the `overridden locally:` line), the
+  commented template in `cordis.patch.yml` (where the file lives — no new key),
+  `docs/contributor/architecture.md` (the module, the classification and action tables, the state field),
+  `docs/contributor/testing.md` (the new suite and
   the counts), `AGENTS.md` (the code map and the status count), and a `CHANGELOG.md` entry written for
   someone deciding whether to upgrade.
