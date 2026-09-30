@@ -71,6 +71,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   repository's `package.json`: a declaration the installed runtime cannot satisfy now fails with the
   loader's own warning text. No other case in the suite could see that failure, because every one of
   them calls the plugin directly. Reverting the declaration to its old exact pin turns it red, 49/50.
+- **A documentation tree, and guidance for agents working in it.** `docs/` now holds the long form:
+  `docs/user/` for installing, updating, the tool and configuration reference, recovery and
+  troubleshooting; `docs/contributor/` for architecture, development, testing, the release process and
+  the documentation rules themselves; `docs/plans/` and `docs/spec/` for dated plans and designs. The
+  root `CHANGELOG.md` stays canonical for releases — `scripts/check-changelog.ts` and the release job
+  both depend on it — so `docs/releases/` indexes it instead of duplicating it. `AGENTS.md` records the
+  constraints and conventions an automated agent follows here. `README.md` and `CONTRIBUTING.md` gained
+  a pointer to the new pages, in both languages, and every relative link is checked by the same
+  `scripts/check-docs.ts` that already ran in `npm test`.
 
 ### Fixed
 

@@ -197,8 +197,10 @@ profile 被追踪的文件复制到 `<stateDir>/backups/<profile>/<时间戳>/`�
 **删除操作绝不传播，两个方向都是。** 手工从 gist 上删掉一个受追踪文件，不会把它从本地删掉：下载会
 保留它，而且 `gist_sync` 会在**同一次调用**里把它放回 gist，因此一次同步就能到达稳定状态，而不会在
 一次"声称已完成"的同步之后仍显示 `local changes to upload`。反过来，在本地删掉它也不会从 gist 上
-删掉：上传会拒绝执行。**没有任何开关能把远端的删除应用到本地** —— 想这么做就自己删掉本地那份，然后
-同步。唯一有意保留的覆盖方式是 `gist_upload` 的 `force: true`，它会把本地缺失的文件从 gist 上删掉。
+删掉：上传会拒绝执行。**没有任何开关能把远端的删除应用到本地**，而"自己删掉本地那份"也不是办法 ——
+`gist_sync` 见到受追踪文件本地缺失时会报 `missing-local` 并把它**下载回来**，因为 gist 上那份可能已是
+仅存的副本。唯一有意保留的覆盖方式是 `gist_upload` 的 `force: true`，它会把本地缺失的文件从 gist 上删
+掉，并在结果里列出文件名。
 
 **同一时刻只有一个写入者，且跨进程生效。** 对 `state.json` 的"读取-修改-写回"由进程内的队列
 **和**一个锁文件（`<stateDir>/state.lock`，其中记录持有者的 pid）共同串行化。因此共享同一状态
@@ -246,6 +248,7 @@ locale/{en,zh}.json    Plugin Manager 卡片用的展示元数据
 icon.svg               bundle 图标
 test/                  八套共 187 项离线用例，另有 12 项真实用例
 scripts/               check-changelog.ts —— 校验 CHANGELOG.md
+docs/                  长文文档：user/ 与 contributor/ 页面、发行索引、计划、设计规格
 .github/               Issue 表单与 PR 模板
 ```
 
@@ -255,6 +258,8 @@ scripts/               check-changelog.ts —— 校验 CHANGELOG.md
 |---|---|
 | [README.md](README.md) | 本文件的英文版。两份保持同步；只改其中一份的行为变更不算完成。 |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 报告问题、开发环境、每套测试证明什么，以及 changelog、提交与发布约定。 |
+| [`docs/`](docs/index.md) | 长文文档：安装与更新、工具与配置参考、恢复与排障，以及贡献者向的架构、开发、测试与发版页面。 |
+| [AGENTS.md](AGENTS.md) | 自动化智能体在本仓库工作所遵循的约束与文档约定。 |
 | [CHANGELOG.md](CHANGELOG.md) | 所有值得记录的变更，最新在前，遵循 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)。 |
 | [LICENSE](LICENSE) | MIT。 |
 
@@ -265,6 +270,9 @@ scripts/               check-changelog.ts —— 校验 CHANGELOG.md
 就会跳过 devDependencies，而那次安装会以退出码 0 结束、什么都没装 —— 这看起来像成功，直到 `tsc`
 找不到为止。插件仍然没有**运行时**依赖：除 `node:` 外不 import 任何东西，也不自带任何依赖，因此
 编译器只是开发工具。
+
+本节的长文版本 —— 类型擦除带来的约束、代码风格，以及每套测试各自证明什么 —— 在
+[`docs/contributor/`](docs/contributor/index.md)。
 
 ```bash
 npm run build           # tsc -p tsconfig.json → dist/，即 Harness 加载的 JavaScript

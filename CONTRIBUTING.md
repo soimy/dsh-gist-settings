@@ -3,6 +3,9 @@
 Thanks for taking the time. This is a small tool that holds other people's configuration, so the
 bar is less about volume and more about not losing anyone's data.
 
+The long form of the material below lives under [`docs/`](docs/index.md) — architecture, development,
+testing, the release process, and the documentation rules themselves. This file stays the contract.
+
 [English](CONTRIBUTING.md) · [中文说明见下](#中文说明)
 
 - [Reporting a problem](#reporting-a-problem)
@@ -267,6 +270,8 @@ recoverable copy.
 ## 中文说明
 
 感谢你愿意花时间。这个工具保管的是别人的配置，所以标准不在于提交多少，而在于**不弄丢任何人的数据**。
+
+下面这些材料的长文版本在 [`docs/`](docs/index.md)——架构、开发、测试、发版流程，以及文档约定本身。本文件保持为"约定"本身。
 
 ### 报告问题
 
