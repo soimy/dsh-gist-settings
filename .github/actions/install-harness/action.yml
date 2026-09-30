@@ -18,13 +18,29 @@ description: >
   simply absent. Hence the check below, which turns that into a failure here with
   the reason attached, instead of a mysterious test failure several steps later.
 
+inputs:
+  dsh-version:
+    description: >
+      An exact @deepseek-ai/dsh version to install. Leave it empty to install the
+      `peerDependencies` declaration, which is what the release job wants; the CI `schema`
+      matrix passes each declared version in turn.
+    required: false
+    default: ''
+
 runs:
   using: composite
   steps:
     - name: Install the declared version
       shell: bash
+      env:
+        # Passed through the environment rather than interpolated into the script: a
+        # version string is data, and data must never be read as shell syntax.
+        REQUESTED_DSH_VERSION: ${{ inputs.dsh-version }}
       run: |
-        version="$(node -p "require('./package.json').peerDependencies['@deepseek-ai/dsh']")"
+        version="$REQUESTED_DSH_VERSION"
+        if [ -z "$version" ]; then
+          version="$(node -p "require('./package.json').peerDependencies['@deepseek-ai/dsh']")"
+        fi
         echo "installing @deepseek-ai/dsh@$version on Node $(node --version)"
         # `--include=dev` is load-bearing: npm omits devDependencies whenever
         # `NODE_ENV=production`, and this install then succeeds having installed only
