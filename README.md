@@ -18,7 +18,7 @@ guarded two-way sync are exposed as agent tools, so you can drive them from a co
 | Sync engine (`lib/core.ts`) | Done |
 | Host plugin + agent tools | **Installed and live**; callable from a session |
 | Real GitHub round-trip | **Verified** against a real account |
-| Test suite | **186 offline cases across eight suites, plus 12 live cases**, all passing |
+| Test suite | **187 offline cases across eight suites, plus 12 live cases**, all passing |
 | CI | Offline suites and repository checks on Linux, Windows and macOS, Node 22.19.0, 22.x and 24.x, plus a repository-wide type check |
 | Client settings page | Not started — see [The settings page](#the-settings-page) |
 | Licence | MIT |
@@ -276,7 +276,7 @@ cordis.patch.yml       Bundle patch (inserts the plugin row; documents config)
 client.js              Client settings page (not yet written)
 locale/{en,zh}.json    Plugin display metadata for Plugin Manager cards
 icon.svg               Bundle icon
-test/                  186 offline cases across eight suites, plus 12 live ones
+test/                  187 offline cases across eight suites, plus 12 live ones
 scripts/               check-changelog.ts — validates CHANGELOG.md
 .github/               Issue forms and the pull-request template
 ```
@@ -303,7 +303,7 @@ development tool only.
 npm run build           # tsc -p tsconfig.json → dist/, the JavaScript the Harness loads
 npm run build:watch     # the same, watching — keep it running while you work
 npm run typecheck       # tsc -p tsconfig.check.json: the whole repository, emitting nothing
-npm test                # builds first (pretest), then the eight offline suites (186 cases) plus the
+npm test                # builds first (pretest), then the eight offline suites (187 cases) plus the
                         # changelog and docs checks
 npm run test:entry      # the package export a profile loads: the build, and the four tools it registers
 npm run test:sync       # engine lifecycle against a fake gh
