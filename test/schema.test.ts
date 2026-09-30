@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 /**
- * Validate this plugin's hand-written tool definitions against the Harness's own
- * contract, using the installed `@deepseek-ai/dsh-tools` validators.
+ * Validate what the Harness checks about this bundle — its hand-written tool
+ * definitions, and the peer declaration that decides whether it loads at all —
+ * against the runtime's own code: the installed `@deepseek-ai/dsh-tools`
+ * validators, and `@deepseek-ai/dsh-app-boot`'s compatibility gate.
  *
  * The plugin deliberately imports nothing from the DSH installation, which is
  * what keeps it immune to module-resolution changes — but it also means the
@@ -13,7 +15,12 @@
  *   - `defineTool()`: `validateJsonSchemaValue` over the arguments — which the
  *     plugin's own `checkArgs` reimplements by hand, so both are compared;
  *   - `createSuccessResult()`: the value `execute` returns really satisfies the
- *     declared `output.schema`.
+ *     declared `output.schema`;
+ *   - `evaluatePluginCompatibility()`: `package.json`'s `peerDependencies`
+ *     satisfies the installed runtime. The profile loader reads that declaration
+ *     and nothing else, so a version it cannot satisfy skips the whole bundle
+ *     however sound the definitions are — which is a failure no other suite here
+ *     can see, because they all call the plugin directly.
  *
  * Finding no DSH installation FAILS the suite by default, because skipping would
  * leave `npm test` green with none of these checks having run. Set
@@ -74,6 +81,21 @@ const asFileUrl = (p: string): string => new URL(`file://${p.replace(/\\/g, '/')
 const { assertSupportedJsonSchema, validateJsonSchemaValue }: JsonSchemaValidators = await import(
   asFileUrl(path.join(toolsDir, 'lib', 'types', 'json-schema.js'))
 )
+
+/**
+ * The profile loader's compatibility check, reached the same way and for the same
+ * reason: `dsh-app-boot` is `dsh-tools`' sibling inside one installed Harness, and its
+ * `evaluatePluginCompatibility` is what the loader calls before it adds a profile layer.
+ * The Harness's own function is used rather than a copy of its rules, so this cannot
+ * drift from what the loader actually does.
+ */
+interface BundleGate {
+  getDshRuntimeVersion(): string
+  evaluatePluginCompatibility(manifest: object): { peers: Record<string, string> } | undefined
+  pluginCompatibilityWarning(issue: { peers: Record<string, string> }): string
+}
+const gate: BundleGate = await import(asFileUrl(path.join(toolsDir, '..', 'dsh-app-boot', 'lib', 'index.js')))
+const manifest = JSON.parse(fs.readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'))
 
 /* Drive the plugin against the fake gh so the suite stays hermetic. */
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-gist-schema-'))
@@ -142,6 +164,26 @@ async function check(name: string, fn: () => unknown) {
 }
 
 console.log(`\ndsh-gist-settings schema conformance\n  dsh-tools: ${toolsDir}\n`)
+
+/**
+ * The declaration, checked with the function the loader itself calls.
+ *
+ * A plugin whose definitions are perfect is still skipped before any of its code runs
+ * when the runtime cannot satisfy its `peerDependencies` — which is how an exact pin
+ * shipped through a green matrix and was refused by the next dsh release.
+ */
+await check(`the bundle manifest passes dsh ${gate.getDshRuntimeVersion()}'s compatibility gate`, () => {
+  const issue = gate.evaluatePluginCompatibility(manifest)
+  assert.equal(issue, undefined, issue ? gate.pluginCompatibilityWarning(issue) : '')
+
+  // Control: the same call has to refuse a declaration nothing can satisfy, or this
+  // case would pass whatever `peerDependencies` said.
+  const impossible = gate.evaluatePluginCompatibility({
+    ...manifest,
+    peerDependencies: { '@deepseek-ai/dsh': '0.0.1' },
+  })
+  assert.ok(impossible, 'the gate must reject an unsatisfiable peer, or this case proves nothing')
+})
 
 /** Arguments the real validator rejects, paired with what they would do if let through. */
 const BAD_ARGS: Array<{ label: string; args: unknown }> = [
