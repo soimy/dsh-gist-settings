@@ -372,21 +372,23 @@ moves:
 
 A refusal fails the operation for **that profile** — and saying so is a requirement of Task 6, not a
 description of what the code does today. `syncAll` already catches per profile, and so do the upload,
-download and sync tool loops, but `statusAll` awaits `profileStatus` in a bare loop, and `gist_status`
-does the same in its own: nothing in today's statuses is something a user is expected to hit, so the gap
-has never shown, and a refusal raised by an override file would abort the whole fleet report instead of
-failing one row. Two things are therefore required:
+download and sync tool loops, but `statusAll` awaits `profileStatus` in a bare loop and `gist_status` does
+the same in its own, so a throw takes the whole fleet report down instead of failing one row. That gap
+predates this design — `collectProfile` can already throw for a tracked file that cannot be read — and an
+override refusal adds a second way to reach it, so the two bulk status paths must adopt the isolation the
+verb paths already have:
 
-- Every refusal the override layer raises carries a marker the way `ghJson`'s "really gone" error already
-  carries `notFound`, and both bulk status paths catch **that marker** per profile, push a failure row
-  naming the profile and the file, and report the remaining profiles. They catch nothing else: an
-  unrelated throw keeps today's behaviour, which is what keeps the no-override path byte-identical.
+- Each profile in a bulk status is awaited inside the same per-profile `try`/`catch` shape `syncAll` uses.
+  A failure becomes a failure row naming the profile and the error, and the remaining profiles are still
+  reported.
 - A **named** profile request (`gist_status <profile>`) keeps failing loudly rather than becoming a row.
   There is no other profile in that call to protect, and the caller asked about this one.
 
 The failure row is `{ profile, status: 'failed', error }`, printed the way the other tools already print a
-per-profile failure (`<profile>: FAILED - <message>`), so one bulk report never hides a broken override and
-never loses the other rows.
+per-profile failure (`<profile>: FAILED - <message>`), so one bulk report never hides a broken profile and
+never loses the other rows. With no override file present this moves no file bytes and changes no
+successful path's text; the one difference is that a profile which already throws in a bulk status is
+reported as a row instead of taking the report down, which is what the verb tools have done all along.
 
 ## Alternatives considered
 
@@ -449,7 +451,7 @@ criterion at the literal level for v1.
 | 3. The override file is never uploaded, pruned or counted as a tracked file | It lives outside the profile directory; `profileFiles`, the prune step and the backup walk cannot reach it. One case each. |
 | 4. The tools name what was overridden | `ProfileStatus.overrides` plus the rendered `overridden locally:` line; `applied` distinguishes a substitution from a file that already agreed. The line names the file and the entry's position, never the values. |
 | 5. A missing target or a wrong shape fails with the file and the key in the message, writing nothing | At v1's literal level: a wrong entry shape is refused at load, and a literal that is absent, ambiguous or conflicting is refused with the file and the entry, before anything is staged, so a download's commit never starts. "The key" arrives with the deferred `path` locator, not before — see below. |
-| 6. Behaviour is byte-identical when no override file exists | No file → no overrides and a `null` fingerprint → the map passed to `hashFiles` and to the writers is the map read from disk, unchanged, and the fingerprint comparison is between two `null`s. |
+| 6. Behaviour is byte-identical when no override file exists | No file → no overrides and a `null` fingerprint → the map passed to `hashFiles` and to the writers is the map read from disk, unchanged, and the fingerprint comparison is between two `null`s. The one deliberate widening is the bulk-status isolation above, which needs no override file to trigger and moves no bytes either way. |
 | 7. Tests, and the documentation that goes with it | See "Consequences" below. |
 
 Criterion 5 is the one place where the issue's words and v1's mechanism do not line up, so the design
@@ -460,8 +462,8 @@ locator. The roadmap's Task 6 states the same literal vocabulary for the same re
 
 The seven criteria do not cover two consequences this design found while settling them, and both are
 requirements of Task 6 rather than observations about it: a declaration that changes must not be read as
-an ordinary local edit ("When the declaration changes"), and a refusal must not take the other profiles'
-status rows down with it ("What is refused").
+an ordinary local edit ("When the declaration changes"), and a failing profile must not take the other
+profiles' status rows down with it ("What is refused").
 
 ## Safety properties that come for free
 

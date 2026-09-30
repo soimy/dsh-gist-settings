@@ -376,11 +376,12 @@ template's commented block), `CHANGELOG.md`.
 
 - [ ] **Step 9: Isolate a failing profile in the bulk status reports**
 
-  `statusAll` and `gist_status`'s fleet loop catch the override layer's marked refusal per profile, push
-  `{ profile, status: 'failed', error }` and report the remaining profiles, the way `syncAll` already
-  does for the verbs. A named-profile call still fails loudly, and a throw this design did not introduce
-  keeps today's behaviour — which Step 6 requires, so the catch is on the marker rather than on every
-  error.
+  `statusAll` and `gist_status`'s fleet loop wrap each profile in the same per-profile `try`/`catch`
+  `syncAll` already uses for the verbs, push `{ profile, status: 'failed', error }` and report the
+  remaining profiles. This is not override-specific: `collectProfile` can already throw today, so the two
+  status paths are the only bulk operations without the isolation the verb paths have, and a refused
+  override is a second way in. A named-profile call still fails loudly. No file bytes move either way,
+  which is what keeps Step 6's bar.
 
   Run: `npm test && npm run typecheck`
   Expected: green, with the new cases and every count updated.
