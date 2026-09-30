@@ -16,7 +16,7 @@
 | 同步引擎（`lib/core.ts`） | 已完成 |
 | Host 插件 + 4 个 agent 工具 | **已安装并生效**，可在会话中调用 |
 | 真实 GitHub 往返 | **已在真实账号上验证** |
-| 测试 | **八套共 186 项离线用例，另有 12 项真实用例**，全部通过 |
+| 测试 | **八套共 187 项离线用例，另有 12 项真实用例**，全部通过 |
 | CI | 在 Linux、Windows、macOS 上跑离线用例与仓库检查，覆盖 Node 22.19.0、22.x、24.x，另有一项全仓库类型检查 |
 | Client 设置页 | 尚未开始 —— 见[设置页](#设置页) |
 | 许可证 | MIT |
@@ -223,8 +223,11 @@ profile 被追踪的文件复制到 `<stateDir>/backups/<profile>/<时间戳>/`�
 
 **不 import Harness 安装目录里的任何东西。** 工具定义是按 `defineTool` 的产物形状手写的普通
 对象。这让 bundle 不受模块解析方式变化的影响；`test/schema.test.ts` 会重放 Harness **自带**的
-校验器，确保定义不会悄悄偏离契约。代价是 Harness 的版本闸门也看不到这个插件，因此
-`peerDependencies` 固定了它所针对的 DSH 版本。
+校验器，确保定义不会悄悄偏离契约。代价是 Harness 的版本闸门同样看不到这个插件：它只读
+`peerDependencies`，一旦安装的 dsh 不满足该声明就整包跳过。所以这份声明是"本插件验证过的 DSH
+版本清单"——`0.1.7-rc.2 || 0.2.0-rc.2`——逐个列出而不写成范围，因为平台发的是预发布版本，而
+semver 的 `^` 跨不过它们：`^0.1.7-rc.2` 的上界落在 `0.2.0-rc.2` 之下。`schema` 任务会把清单里的
+每个版本都装一遍。
 
 **secret gist 的 URL 是"持有即可读"的凭据。** 任何人拿到链接无需登录即可读取，而工具会把该
 URL 输出到结果里，进而进入对话记录。请据此对待这些链接。
@@ -241,7 +244,7 @@ cordis.patch.yml       bundle 补丁（插入插件行；并记录配置说明�
 client.js              Client 设置页（尚未编写）
 locale/{en,zh}.json    Plugin Manager 卡片用的展示元数据
 icon.svg               bundle 图标
-test/                  八套共 186 项离线用例，另有 12 项真实用例
+test/                  八套共 187 项离线用例，另有 12 项真实用例
 scripts/               check-changelog.ts —— 校验 CHANGELOG.md
 .github/               Issue 表单与 PR 模板
 ```
@@ -267,7 +270,7 @@ scripts/               check-changelog.ts —— 校验 CHANGELOG.md
 npm run build           # tsc -p tsconfig.json → dist/，即 Harness 加载的 JavaScript
 npm run build:watch     # 同上，持续监听 —— 开发时让它一直跑着
 npm run typecheck       # tsc -p tsconfig.check.json：检查整个仓库，不产出文件
-npm test                # 先构建（pretest），再跑八套离线用例（186 项）与 CHANGELOG、文档链接检查
+npm test                # 先构建（pretest），再跑八套离线用例（187 项）与 CHANGELOG、文档链接检查
 npm run test:entry      # profile 实际加载的 package export：构建产物，以及它注册的四个工具
 npm run test:sync       # 用假 gh 跑引擎完整生命周期
 npm run test:tools      # 工具层、参数校验、故障隔离

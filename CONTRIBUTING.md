@@ -90,7 +90,7 @@ runs `npm run build` — so a test run cannot exercise a stale `dist/`.
 | `npm run test:entry` | 6 | The boundary a profile actually crosses. Other suites import the sources; this one loads the plugin the way the Cordis loader does — by package name, through `exports` — and pins that the export names the build rather than the sources, that the artifact and its declarations exist, that a registering context gets all four tools with the shape the registry requires, and that the build registers exactly what the source does. A wrong export, a missing or stale `dist/`, or an entry that loads and registers nothing each fail it. |
 | `npm run test:sync` | 19 | The engine's whole lifecycle against an in-memory `gh`: create, upload, divergence, download, backup, pruning, recreation, idempotency. |
 | `npm run test:tools` | 23 | The tool layer: registration, argument validation, config validation at load, profile-name resolution, and that one failing profile never aborts the others. |
-| `npm run test:schema` | 49 | The hand-written definitions against the Harness's *own* validators — the registration contract, the supported JSON Schema subset, argument validation, and that each returned value satisfies its declared output schema. |
+| `npm run test:schema` | 50 | The hand-written definitions against the Harness's *own* validators — the registration contract, the supported JSON Schema subset, argument validation, and that each returned value satisfies its declared output schema — plus the loader's compatibility gate, called on this repository's `package.json` so a peer declaration the installed runtime cannot satisfy fails here rather than in a user's profile. |
 | `npm run test:regression` | 32 | The specific defects an adversarial review found. Every case here fails if its fix is reverted. |
 | `npm run test:safety` | 38 | The guarantees the README makes: containment for the profile and every tracked file, an all-or-nothing download, `force` doing what it says, recovery of a profile whose directory is gone, one-sync convergence after a remote deletion, cross-process state locking, and a rollback that never overwrites a revision it cannot prove it wrote. |
 | `npm run test:docs` | 13 | The documentation checker: the destination shapes Markdown allows (angle brackets, balanced parentheses, backslash escapes) and the containment rule — a link out of the repository, written directly or reached through a link inside it, is refused. Each of those was a real defect at some point, which is why the checker has its own suite. |
@@ -143,11 +143,12 @@ and every script are checked together.
 
 The `schema` job is separate on purpose. `test/schema.test.ts` checks the hand-written tool
 definitions against the Harness's *own* validators, so it needs a Harness installation — and no runner
-has one. It installs the version named in `peerDependencies` (so the contract and the declared target
-cannot drift) and runs that suite against it. The matrix, meanwhile, opts into the suite's explicit skip
-with `DSH_ALLOW_SCHEMA_SKIP=1`, which prints a `SKIP:` line, so the other cases still run on all ten
-legs. The skip is visible in the log rather than silent, because a contract check that quietly runs
-nothing reads as coverage.
+has one. It runs one leg per version named in `peerDependencies`, reading that list out of the
+declaration itself so the matrix cannot drift from it, and installs each version in turn: a declared
+target that nothing installs is a claim, not a check. The suite matrix, meanwhile, opts into the schema
+suite's explicit skip with `DSH_ALLOW_SCHEMA_SKIP=1`, which prints a `SKIP:` line, so the other cases
+still run on all seven legs. The skip is visible in the log rather than silent, because a contract
+check that quietly runs nothing reads as coverage.
 
 That install lives in one composite action, `.github/actions/install-harness`, which the release job uses
 too. Two jobs need a Harness; they should not each have their own way of getting one — and the release
@@ -314,7 +315,7 @@ plugin_manager  action: install_bundle  target: <此仓库的绝对路径>
 | `npm run test:entry` | 6 | profile 真正跨过的那道边界。其他套件 import 源码；这一套按 Cordis loader 的方式加载插件 —— 按包名、经 `exports` —— 并钉住：export 指向的是构建产物而非源码、产物与其声明文件存在、注册的上下文拿到四个工具且形状满足注册要求、产物注册的内容与源码完全一致。export 写错、`dist/` 缺失或陈旧、入口加载成功却不注册工具，都会让它失败。 |
 | `npm run test:sync` | 19 | 引擎完整生命周期（内存版 gh）：创建、上传、分叉、下载、备份、清理、重建、幂等。 |
 | `npm run test:tools` | 23 | 工具层：注册、参数校验、加载时的配置校验、profile 名解析、单个 profile 失败不会中断其他。 |
-| `npm run test:schema` | 49 | 手写定义 vs Harness **自带**校验器：注册契约、受支持的 JSON Schema 子集、参数校验、返回值满足声明的输出 schema。 |
+| `npm run test:schema` | 50 | 手写定义 vs Harness **自带**校验器：注册契约、受支持的 JSON Schema 子集、参数校验、返回值满足声明的输出 schema；外加加载器的兼容性闸门——直接拿本仓库的 `package.json` 去调用，因此一处当前运行时无法满足的 peer 声明会在这里失败，而不是在用户的 profile 里失败。 |
 | `npm run test:regression` | 32 | 对抗性审核发现的具体缺陷。**每一条在修复被回退时都会失败。** |
 | `npm run test:safety` | 38 | README 承诺的那些保证：profile 与每个受追踪文件的目录包容、全有或全无的下载、`force` 说到做到、目录被整个删掉后的恢复、远端删除后一次同步即收敛、跨进程状态锁，以及绝不覆盖「无法证明是自己写的那一版」的回滚。 |
 | `npm run test:docs` | 13 | 文档链接检查器：Markdown 允许的各种目标写法（尖括号、配对括号、反斜杠转义），以及仓库包容规则 —— 指向仓库之外的链接，无论是直写还是经由仓库内部的链接抵达，都会被拒绝。这些每一项都曾是真实缺陷，所以这个检查器有自己的套件。 |
@@ -339,7 +340,7 @@ plugin_manager  action: install_bundle  target: <此仓库的绝对路径>
 
 `typecheck` 任务补上的是矩阵看不见的那个缺口。`npm test` 通过 `pretest` 构建运行时，但它从不编译各套件与脚本：Node 在加载时擦除它们的类型，而擦除不等于检查。因此一处写错的测试会在上面全部七条支线上通过，只在 `npm run typecheck` 上失败。这个任务把同一条命令跑一次，跑在下限版本上，在那里运行时、每一个套件与每一个脚本被一起检查。
 
-`schema` 任务也是刻意独立的。`test/schema.test.ts` 拿手写的工具定义去撞 Harness **自带**的校验器，因此需要一份 Harness 安装——而运行器上没有。它会安装 `peerDependencies` 里声明的那个版本（这样契约与声明的目标版本不会漂移），并用它跑这套校验。与此同时，矩阵那边选择接受这套件的显式跳过（`DSH_ALLOW_SCHEMA_SKIP=1`，日志里会打印 `SKIP:` 行），从而让其余用例仍然在全部十条支线上跑。这个跳过是**日志里看得见的**，而不是静默的，因为一个 quietly 什么都不跑的契约检查读起来像是覆盖到了。
+`schema` 任务也是刻意独立的。`test/schema.test.ts` 拿手写的工具定义去撞 Harness **自带**的校验器，因此需要一份 Harness 安装——而运行器上没有。它为 `peerDependencies` 里声明的**每一个**版本各跑一条支线，并且是从声明本身读出这份清单，矩阵因此不会与它漂移；每个版本都会被真正安装——一个没人安装的"声明目标"只是声称，不是检查。与此同时，套件矩阵那边选择接受这套件的显式跳过（`DSH_ALLOW_SCHEMA_SKIP=1`，日志里会打印 `SKIP:` 行），从而让其余用例仍然在全部七条支线上跑。这个跳过是**日志里看得见的**，而不是静默的，因为一个 quietly 什么都不跑的契约检查读起来像是覆盖到了。
 
 这份安装逻辑放在唯一的 composite action（`.github/actions/install-harness`）里，发布任务也复用它。有两个任务需要 Harness，它们就不该各自发明一套拿 Harness 的办法——尤其发布任务**不能**沿用矩阵的那个跳过，所以那边的 `npm test` 会真的执行 schema 契约。
 
