@@ -437,10 +437,12 @@ files and no gist is the one case that neither restores nor uploads.
 - `profile "<name>" has no local config files and no gist to restore them from. Restore the files, or
   delete the profile directory if it is obsolete.`
 - Everything the upload, download and status paths can raise, plus the shared failures below.
-- Deletions are never propagated in either direction: a tracked file removed from the gist is put back
-  into it in the same call, and a tracked file deleted locally is not removed from the gist. Applying a
-  deletion is a deliberate act on the side that still holds the copy — delete the local file and sync,
-  or use `gist_upload` with `force: true`.
+- Deletions are never propagated in either direction on their own: a tracked file removed from the gist
+  is put back into it in the same call, and a tracked file deleted locally is not removed from the gist.
+  Applying a deletion is a deliberate act on the side that still holds the copy, and the only tool that
+  performs one is `gist_upload` with `force: true`, which drops the locally-missing file from the gist
+  and names it in the result. `gist_sync` is not a shortcut for it: a tracked file missing locally is
+  reported as `missing-local` and downloaded back, because the gist may hold the only copy.
 
 ## Failures common to all four
 

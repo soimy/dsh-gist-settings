@@ -193,9 +193,11 @@ resolve on their own, because the gist may hold the only copy.
 does not delete it locally: the download keeps it, and `gist_sync` puts it back into the gist in the
 same call, so one sync reaches a stable state instead of leaving the profile reporting `local changes
 to upload` after a sync that claimed to have finished. Deleting it locally does not delete it from the
-gist either: the upload refuses. There is no flag that applies a remote deletion to the local copy —
-delete the local file yourself, then sync, if that is what you want. The one deliberate override is
-`gist_upload` with `force: true`, which drops a locally-missing file from the gist.
+gist either: the upload refuses. There is no flag that applies a remote deletion to the local copy, and
+deleting the local file is not a way around that: `gist_sync` sees a tracked file missing locally,
+reports `missing-local` and downloads it back, because the gist may hold the only copy. The one
+deliberate override is `gist_upload` with `force: true`, which drops a locally-missing file from the gist
+and names it in the result.
 
 **Backups before destructive writes, and an all-or-nothing write.** `gist_download` copies the
 profile's tracked files to `<stateDir>/backups/<profile>/<timestamp>/` before overwriting anything,
