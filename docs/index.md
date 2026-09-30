@@ -20,7 +20,7 @@ README or CONTRIBUTING section owns the summary it expands.
 | How is a release cut? | [Release process](contributor/release-process.md) |
 | How should documentation be written here? | [Documentation rules](contributor/documentation.md) |
 | What changed, and when? | [`CHANGELOG.md`](../CHANGELOG.md), indexed by [Releases](releases/index.md) |
-| What is planned next? | [Post-TypeScript roadmap](plans/2026-09-30-post-typescript-roadmap.md) |
+| What is planned next? | [Roadmap](plans/2026-09-30-post-typescript-roadmap.md) — the sequence, the two open issues, and the settings page |
 | What are the rules for an agent working here? | [`AGENTS.md`](../AGENTS.md) |
 
 ## The shape of this documentation
