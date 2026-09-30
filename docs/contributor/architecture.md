@@ -181,7 +181,7 @@ licence, both READMEs, `CHANGELOG.md` and `CONTRIBUTING.md`.
 
 ## Why the suites and the scripts run from source
 
-The nine suites under `test/` and the three scripts under `scripts/` are TypeScript too, and nothing
+The ten suites under `test/` and the three scripts under `scripts/` are TypeScript too, and nothing
 compiles them. Node strips their types as it loads them, which is allowed *outside* `node_modules` —
 the inverted reason the build exists. So `node test/sync.test.ts` works with no build step, and the
 suites import `../index.ts` and `../lib/core.ts` directly, which is why an edit to either source is
@@ -194,12 +194,13 @@ the runtime, but the suites and scripts are never compiled.
 fails on a mistyped test exactly as it fails on a mistyped engine. CI runs that one command in its own
 job, because the platform matrix would otherwise repeat a single answer seven times.
 
-The one exception to "from source" is `test/entry.test.ts`. It imports the package by name
-(`@local/dsh-gist-settings`), so the resolution it exercises is the real one through `exports`, and it
-therefore needs `dist/`. `npm test` builds first through `pretest`, and `npm run test:entry` is
-`npm run build && node test/entry.test.ts`. Every other suite runs standalone. What each suite proves is
-the subject of [Testing](testing.md); the suites and their coverage are also tabulated in
-[`CONTRIBUTING.md`](../../CONTRIBUTING.md).
+The exceptions to "from source" are `test/entry.test.ts` and `test/guards.test.ts`. The first imports
+the package by name (`@local/dsh-gist-settings`), so the resolution it exercises is the real one through
+`exports`; the second checks that what `exports` and `files` name exists after a build. Both therefore
+need `dist/`. `npm test` builds first through `pretest`, and `npm run test:entry` and
+`npm run test:guards` are each `npm run build && node <suite>`. Every other suite runs standalone. What
+each suite proves is the subject of [Testing](testing.md); the suites and their coverage are also
+tabulated in [`CONTRIBUTING.md`](../../CONTRIBUTING.md).
 
 ## The compatibility gate
 
@@ -515,6 +516,7 @@ The rule the two-module split exists to state:
 | Which files are tracked | `resolveProfileFiles` / `normalizeTrackedName` in `lib/core.ts`, with the key kept in `readConfig`'s `KNOWN_CONFIG_KEYS` | `test/safety.test.ts`, `test/tools.test.ts` |
 | The compatibility declaration | `package.json`, plus a CI leg that installs each declared version | `test/schema.test.ts` |
 | The bundle patch and the row it inserts | `cordis.patch.yml` | An install into a real profile |
+| The repository's own scaffolding — stripping, imports, packaging, the compiler flags, the Node floor | `package.json`, `tsconfig.json`, `.github/workflows/ci.yml`, the file layout itself | `test/guards.test.ts` |
 
 The suites listed are the ones that own the behaviour, not the only ones that exercise it; the full
 mapping is in [Testing](testing.md) and in [`CONTRIBUTING.md`](../../CONTRIBUTING.md) under

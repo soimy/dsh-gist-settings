@@ -80,6 +80,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   constraints and conventions an automated agent follows here. `README.md` and `CONTRIBUTING.md` gained
   a pointer to the new pages, in both languages, and every relative link is checked by the same
   `scripts/check-docs.ts` that already ran in `npm test`.
+- **A guard suite**, `npm run test:guards` (`test/guards.test.ts`), second in the `npm test` chain. The
+  suites here test what the code *does*; nothing tested the properties this repository needs in order to
+  run at all, and every one of them fails silently in normal use. It asserts that every `.ts` file in the
+  tree survives Node's own type stripper; that every relative import — wrapped across lines, bare, or
+  dynamic — names a file that exists rather than a directory, and that the runtime still names `.ts`,
+  because that is what the build rewrites and naming `.js` in the source would compile and then refuse to
+  load; that no compiled JavaScript is left beside its own source or outside `dist/`; that every string
+  anywhere in `exports`, and every `files` entry, exists after a build, with `*` patterns required to
+  match something real; that every suite and script is actually *run* by a package script, and that the
+  live suite — which spends a real GitHub token — is not reachable from `npm test`; that the
+  compiler flags this repository depends on are on in both tsconfigs; and that `engines.node` is a matrix
+  leg CI genuinely runs, not merely a version named somewhere in the workflow. Each case was verified by
+  breaking its invariant by hand and watching only that case go red — and the check was verified against
+  its own blind spots too, since a guard suite that quietly stops matching is the failure it exists to
+  prevent. `npm test` now runs 194 cases across nine offline suites.
 
 ### Fixed
 

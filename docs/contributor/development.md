@@ -70,7 +70,8 @@ The working loop:
 1. Keep `npm run build:watch` running in one terminal.
 2. Edit `index.ts` or `lib/core.ts`.
 3. Run the suite that covers the change directly, for example `node test/sync.test.ts`. Nothing has to
-   be built for any suite except `test/entry.test.ts`; [Testing](testing.md) maps behaviour to suite.
+   be built for any suite except `test/entry.test.ts` and `test/guards.test.ts`; [Testing](testing.md)
+   maps behaviour to suite.
 4. Run `npm run typecheck` before you commit — it is the only thing that checks the suites themselves.
 5. Reload the profile, or reinstall the bundle, to run the new `dist/`.
 
@@ -79,10 +80,11 @@ To exercise the working copy against a real profile, install the checkout as a b
 at that moment and an edit that was never rebuilt is invisible. `CONTRIBUTING.md` has the exact
 `plugin_manager` call under [Development setup](../../CONTRIBUTING.md#development-setup).
 
-`test/entry.test.ts` is the one exception to step 3's "no build needed". It loads `dist/` the way the
-Cordis loader does and refuses to run at all when `dist/index.js`, `dist/lib/core.js` or
-`dist/index.d.ts` is missing, printing the two commands that produce them. `npm run test:entry` builds
-first; `npm test` does too, through `pretest`.
+`test/entry.test.ts` and `test/guards.test.ts` are the exceptions to step 3's "no build needed". The
+first loads `dist/` the way the Cordis loader does and refuses to run at all when `dist/index.js`,
+`dist/lib/core.js` or `dist/index.d.ts` is missing; the second checks that what `exports` and `files`
+name exists after a build. Both print the commands that produce `dist/`. `npm run test:entry` and
+`npm run test:guards` build first; `npm test` does too, through `pretest`.
 
 ## What `npm run typecheck` covers, and what it does not
 
@@ -92,7 +94,7 @@ things: `noEmit: true` with `declaration: false`, so it writes nothing, and an `
 (The last pattern matches nothing today: there is no `types/` directory. It is there so ambient
 declarations would be checked if one appeared.)
 
-What it covers is every TypeScript file in the repository in one pass — runtime, all nine suites and all
+What it covers is every TypeScript file in the repository in one pass — runtime, all ten suites and all
 three scripts — against the same pinned `@types/node`. That matters because of how the suites run: Node
 erases their types as it loads them, and erasing is not checking. A mistyped test therefore passes
 `npm test` and fails only here. CI gives that its own job, on the floor Node version, for exactly this

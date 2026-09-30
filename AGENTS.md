@@ -43,7 +43,7 @@ This repository is licensed under MIT.
 │   ├── releases/               # Release index; the canonical notes are the root CHANGELOG.md
 │   ├── plans/                  # Dated agent-authored plans (YYYY-MM-DD-slug.md)
 │   └── spec/                   # Dated design specs (YYYY-MM-DD-slug-design.md)
-├── test/                       # Nine suites, three helpers; run from source, never compiled
+├── test/                       # Ten suites, three helpers; run from source, never compiled
 ├── scripts/                    # check-changelog, check-docs, release-notes; run from source
 └── .github/
     ├── workflows/              # CI (matrix + typecheck + schema job) and release
@@ -184,8 +184,9 @@ npm install --include=dev      # one-time setup; --include=dev is load-bearing, 
 npm run build                  # tsc -p tsconfig.json → dist/, the JavaScript the Harness loads
 npm run build:watch            # the same, watching — keep it running while you work
 npm run typecheck              # tsc -p tsconfig.check.json: runtime, tests, scripts; emits nothing
-npm test                       # builds first (pretest), then 187 cases and the repository checks
+npm test                       # builds first (pretest), then 194 cases and the repository checks
 npm run test:entry             # the package export a profile loads
+npm run test:guards            # the repository's own invariants: stripping, imports, packaging, the floor
 npm run test:sync              # engine lifecycle against a fake gh
 npm run test:tools             # tool layer, argument validation, failure isolation
 npm run test:schema            # definitions vs. the installed Harness validators + the loader's gate

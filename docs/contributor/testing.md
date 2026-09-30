@@ -1,7 +1,7 @@
 # Testing
 
 This page is the long form of [What the test suites prove](../../CONTRIBUTING.md#what-the-test-suites-prove)
-and [Continuous integration](../../CONTRIBUTING.md#continuous-integration): what each of the nine suites
+and [Continuous integration](../../CONTRIBUTING.md#continuous-integration): what each of the ten suites
 does mechanically, which cases are load-bearing, and what runs where. The short table of counts and
 one-line claims stays in `CONTRIBUTING.md`; this page is the version you read when a case fails and you
 need to know whether it is your change or the platform.
@@ -13,24 +13,26 @@ never exercise a stale `dist/`:
 
 1. `npm run build` — `tsc -p tsconfig.json` (`pretest`).
 2. `node test/entry.test.ts` — the boundary a profile crosses.
-3. `node test/sync.test.ts` — the engine lifecycle.
-4. `node test/tools.test.ts` — the tool layer.
-5. `node test/schema.test.ts` — the definitions against the installed Harness.
-6. `node test/regression.test.ts` — the defects the adversarial reviews found.
-7. `node test/safety.test.ts` — the guarantees the README makes.
-8. `node test/release.test.ts` — the release-notes script.
-9. `node test/docs.test.ts` — the documentation checker.
-10. `node scripts/check-changelog.ts`.
-11. `node scripts/check-docs.ts`.
+3. `node test/guards.test.ts` — the invariants nothing else can see.
+4. `node test/sync.test.ts` — the engine lifecycle.
+5. `node test/tools.test.ts` — the tool layer.
+6. `node test/schema.test.ts` — the definitions against the installed Harness.
+7. `node test/regression.test.ts` — the defects the adversarial reviews found.
+8. `node test/safety.test.ts` — the guarantees the README makes.
+9. `node test/release.test.ts` — the release-notes script.
+10. `node test/docs.test.ts` — the documentation checker.
+11. `node scripts/check-changelog.ts`.
+12. `node scripts/check-docs.ts`.
 
 The chain is the npm script itself, not `npm run test:*` wrappers, so each step is one `node` process
 reading TypeScript from source. Because it is a chain, the first failing suite stops the run: a report
-that only shows `test/sync.test.ts` failing means nothing after it ran. `test/entry.test.ts` is the only
-suite that needs `dist/`, and step 1 is why running the whole chain works from a clean checkout.
-`npm test` does **not** run `npm run typecheck` — that is a separate command locally and a separate CI
-job.
+that only shows `test/sync.test.ts` failing means nothing after it ran. `test/entry.test.ts` and
+`test/guards.test.ts` are the two suites that *borrow* the build rather than reading the sources, and
+step 1 is why running the whole chain works from a clean checkout. `npm test` does **not** run
+`npm run typecheck` — that is a separate command
+locally and a separate CI job.
 
-Eight of the nine suites are in the chain. The ninth, `test/live.test.ts`, is opt-in and never runs as
+Nine of the ten suites are in the chain. The tenth, `test/live.test.ts`, is opt-in and never runs as
 part of `npm test`.
 
 ## Running one suite
@@ -44,13 +46,16 @@ node test/safety.test.ts
 npm run test:schema            # the npm aliases are thin wrappers around the same command
 ```
 
-`test/entry.test.ts` is the exception twice over: it loads `dist/`, and `npm run test:entry` therefore
-runs `npm run build` before it. Running it bare on a checkout with no `dist/` fails immediately and
-prints the two commands that produce one, rather than reporting on an artifact that is not there.
+`test/entry.test.ts` and `test/guards.test.ts` are the exceptions: both read what the build emits, and
+`npm run test:entry` and `npm run test:guards` therefore run `npm run build` before them. Running either
+bare on a checkout with no `dist/` fails immediately and prints the two commands that produce one, rather
+than reporting on an artifact that is not there. Every other suite runs against the sources with no build
+step at all.
 
 | Suite | Command | Cases | Mechanism in one line |
 | --- | --- | --- | --- |
 | [`test/entry.test.ts`](../../test/entry.test.ts) | `npm run test:entry` | 6 | Imports the package by name and compares the built entry against the sources. |
+| [`test/guards.test.ts`](../../test/guards.test.ts) | `npm run test:guards` | 7 | Discovers the repository's whole `.ts` tree and asserts the invariants about it that no behavioural case can see. |
 | [`test/sync.test.ts`](../../test/sync.test.ts) | `node test/sync.test.ts` | 19 | Drives the engine's whole lifecycle against the fake `gh`. |
 | [`test/tools.test.ts`](../../test/tools.test.ts) | `node test/tools.test.ts` | 23 | Registers the four tools through a stub context and calls them. |
 | [`test/schema.test.ts`](../../test/schema.test.ts) | `npm run test:schema` | 50 | Replays the Harness's own validators and the loader's compatibility gate. |
@@ -60,8 +65,8 @@ prints the two commands that produce one, rather than reporting on an artifact t
 | [`test/docs.test.ts`](../../test/docs.test.ts) | `node test/docs.test.ts` | 13 | Builds a miniature checkout and runs `scripts/check-docs.ts` against it. |
 | [`test/live.test.ts`](../../test/live.test.ts) | `npm run test:live` | 12 | The real GitHub round trip; opt-in. |
 
-The counts are the ones `CONTRIBUTING.md` records and the ones a run on Node v22.23.1 reports: 187 cases
-across the eight offline suites, plus the 12 live ones. `test/safety.test.ts` can print fewer passes than
+The counts are the ones `CONTRIBUTING.md` records and the ones a run on Node v22.23.1 reports: 194 cases
+across the nine offline suites, plus the 12 live ones. `test/safety.test.ts` can print fewer passes than
 that on a platform where a case skips, and says so separately.
 
 ## The shared runner, the fixture and the helpers
@@ -143,6 +148,64 @@ is the stale-build detector: the fingerprint deliberately reaches past the decla
 each tool's output schema, what `output.render` produces for a probe, and the concurrency verdict —
 because comparing `name`/`description`/`parameters` alone would call a build that changed only behaviour
 identical.
+
+## `test/guards.test.ts` — the invariants nothing else can see
+
+**Mechanism.** It reads the repository rather than exercising the plugin. The subjects are discovered,
+not listed: every `.ts` file in the tree outside `dist/`, `node_modules/`, `.git/` and `.worktrees/`, so
+a source that appears in a new directory is guarded the moment it lands. It parses `package.json`,
+`tsconfig.json`, `tsconfig.check.json` and `.github/workflows/ci.yml` the same way — as text — and
+asserts seven properties of the whole. No child process, and one in-memory fixture — a miniature workflow
+inside the Node-floor case — which exists because the boundary that case depends on cannot be observed on
+a workflow that is correct. The only thing it borrows from the build is the case that checks what
+`exports` and `files` name.
+
+**What it proves.** The properties this repository depends on to run at all, none of which a behavioural
+suite can observe, because all seven fail *silently* in normal use: a file that stops surviving Node's
+type stripper fails only when someone runs it; a removed `erasableSyntaxOnly` merely stops being checked;
+a `package.json` entry that names nothing is only discovered at pack time; and an `engines.node` that
+drifts from the leg CI actually runs is noticed on the platform nobody develops on. A short in-repo scan
+is also the only way to see the difference between "the cases pass" and "every case still runs at all".
+
+**Notable cases.** `every relative import names a file that exists, and the runtime imports .ts` is the
+one that reaches across files. It resolves each specifier against the importing file's own directory,
+requires the resolved path to be a **file** (a directory resolves and then fails at load with
+`ERR_UNSUPPORTED_DIR_IMPORT`), and — for `index.ts` and `lib/**` only — requires the specifier to end in
+`.ts`, because that suffix is what the build's `rewriteRelativeImportExtensions` turns into `.js`; naming
+`.js` in the source compiles and then fails to load. The scan reads a wrapped `import {\n…\n} from '…'`,
+a bare `import '…'`, and a dynamic `import('…')` anywhere in an expression, over a copy of the source
+with its comments removed — a scanner rather than a line filter, because `//` and both quote characters
+also appear inside strings and regular expressions here, and because a comment that names a path must not
+be mistaken for an import. `the packaging names artifacts a build emits` walks `exports` recursively, so a
+condition nested inside `exports["."]`, or a subpath nobody can import, cannot name a file that does not
+exist, and a `*` pattern has to match something, so `./locale/*.json` cannot point at a directory that
+holds no locale file. `every suite and script is run by a package script` resolves the `&&` chain one
+alias deep and requires a segment that actually *runs* the file — `echo skipped test/sync.test.ts` names
+it without running it — and separately requires the live suite to stay out of `npm test` itself.
+`the declared Node floor is the one CI runs` asserts the shape, not a string: the floor is a matrix entry
+with an `os`, the comment naming whose floor it is sits with that leg, and no line of the step running
+`npm test` carries an `if:`, so the floor cannot be installed and skipped. That step is read whole — YAML
+keys are unordered, so an `if:` below the command skips it just the same — and it is bounded by its own
+indentation, so a condition on the job that follows is not read as a condition on this one.
+
+**Where it deliberately stops.** Four boundaries are named rather than silent. A hand-written `client.js`
+at the repository root is allowed, because the README documents it there as the settings page the Harness
+bundles — a source, not compiled output; a `.js` beside a `.ts` twin, or nested anywhere outside `dist/`,
+is not. A `.tsx` or `.jsx` source cannot be executed by Node's type stripper at all, so this suite does
+not claim to cover one; the day the settings page adds such a file, the bounds of this suite change
+deliberately rather than quietly. The import scan reads comment-stripped text rather than a syntax tree,
+so a specifier spelled inside an ordinary string is read as an import — no file here writes a real
+specifier that way, and the alternative is a parser this suite does not need. And a `.ts` file in a
+directory nothing else polices is still scanned, which is the point of discovering subjects instead of
+listing them.
+
+**Why it is not a behaviour suite.** Each of the seven cases describes the *repository*, not the plugin,
+so its mechanism is a file read and its failure is a report naming the file. Every case was verified the
+way `CONTRIBUTING.md` requires: break the invariant by hand, watch only that case go red, restore it —
+an `enum` appended to a script, an import pointed at a missing file, at a non-`.ts` file, pulled across
+lines and made a directory, an `exports` condition and a `files` entry naming nothing, a suite kept in
+the chain only as an `echo` argument, a flag removed, the floor moved, and the CI step that runs the
+floor made conditional.
 
 ## `test/sync.test.ts` — the engine lifecycle
 
@@ -468,8 +531,9 @@ it.
   survive.
 - **Never weaken, delete, merge or skip a case** to make a change pass. A test that cannot fail is worse
   than no test.
-- **A suite fails rather than skips when its precondition is missing.** `test/entry.test.ts` without a
-  build and `test/schema.test.ts` without a Harness both fail and say what is missing, because a check
+- **A suite fails rather than skips when its precondition is missing.** `test/entry.test.ts` and
+  `test/guards.test.ts` without a build, and `test/schema.test.ts` without a Harness, all fail and say
+  what is missing, because a check
   that quietly runs nothing reads as coverage. The two deliberate opt-outs are explicit and visible: set
   `DSH_ALLOW_SCHEMA_SKIP=1` to accept the schema skip, and `test/safety.test.ts`'s skips print a reason
   and are reported separately instead of counting as passes.

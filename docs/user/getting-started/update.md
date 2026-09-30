@@ -35,10 +35,12 @@ process holds the module generation it loaded at start; the README's
 round — a reload picks up whatever `dist/` holds at that moment.
 
 Skipping the rebuild is the quieter mistake of the two: an unbuilt edit is invisible, so the four
-tools simply keep their previous behaviour and nothing reports a problem. Two commands build for you
+tools simply keep their previous behaviour and nothing reports a problem. Three commands build for you
 rather than letting that happen: `npm test` compiles first through its `pretest` step, so a test run
-cannot exercise a stale `dist/`, and `npm run test:entry` builds first because it loads the plugin
-the way the Cordis loader does — by package name, through `exports`.
+cannot exercise a stale `dist/`, and `npm run test:entry` and `npm run test:guards` build first because
+they read what the build emits — the first loads the plugin the way the Cordis loader does, by package
+name through `exports`, and the second checks that `exports` and `files` still name artifacts that
+exist.
 
 ## When dsh moves to a new version
 
