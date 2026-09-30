@@ -162,18 +162,121 @@ function parseJsonc(source: string): unknown {
 }
 
 /**
- * The source with its full-line comments removed.
+ * A TypeScript source with all of its comments removed.
  *
- * The dynamic-import pass cannot anchor to a line start, so without this it would read the
- * example in this very comment as a specifier — and a guard suite that fails on a comment is
- * a guard suite people delete. Only whole comment lines go: every comment in this repository
- * is written that way, and dropping one could never hide an import that Node would resolve.
+ * The import scan has to read a specifier on any line and in any of the three quote
+ * characters, so it cannot anchor to a line start everywhere — and a comment that names a
+ * path (this repository is full of them) would then be read as an import. A scanner rather
+ * than a regular expression, because `//` and both quote characters also appear inside
+ * strings and regular expressions here. The one heuristic is that a `/` where a value may
+ * begin starts a regular expression rather than a division; the two readings are handled the
+ * same way, by copying the span to its closing delimiter.
  */
-function codeLines(source: string): string {
-  return source
-    .split('\n')
-    .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
-    .join('\n')
+function withoutComments(source: string): string {
+  let out = ''
+  let index = 0
+  // The last significant character emitted, for the regex-versus-division guess below.
+  let previous = ''
+  const valueMayStart = () => previous === '' || '([{,;=:!&|?+-*%~^<>'.includes(previous)
+
+  while (index < source.length) {
+    const char = source[index]
+    const next = source[index + 1]
+
+    if (char === '/' && next === '/') {
+      while (index < source.length && source[index] !== '\n') index += 1
+      out += '\n'
+      previous = '\n'
+      continue
+    }
+
+    if (char === '/' && next === '*') {
+      index += 2
+      while (index < source.length && !(source[index] === '*' && source[index + 1] === '/')) index += 1
+      index += 2
+      out += ' '
+      previous = ' '
+      continue
+    }
+
+    if (char === '/' && valueMayStart()) {
+      out += char
+      index += 1
+      let inCharacterClass = false
+      while (index < source.length) {
+        const inner = source[index]
+        out += inner
+        index += 1
+        // A division read as a regex stops at the end of its line rather than swallowing the
+        // rest of the file; the copied text is unchanged either way.
+        if (inner === '\\' && index < source.length) {
+          out += source[index]
+          index += 1
+          continue
+        }
+        if (inner === '[') inCharacterClass = true
+        else if (inner === ']') inCharacterClass = false
+        else if (inner === '/' && !inCharacterClass) break
+        else if (inner === '\n') break
+      }
+      previous = '/'
+      continue
+    }
+
+    if (char === '"' || char === "'" || char === '`') {
+      out += char
+      index += 1
+      let closed = false
+      while (index < source.length) {
+        const inner = source[index]
+        out += inner
+        index += 1
+        if (inner === '\\' && index < source.length) {
+          out += source[index]
+          index += 1
+          continue
+        }
+        if (inner === char) {
+          closed = true
+          break
+        }
+        // An ordinary string cannot span a line, so a missing quote is a typo rather than an
+        // invitation to treat the rest of the file as a string.
+        if (inner === '\n' && char !== '`') break
+      }
+      previous = closed ? char : '\n'
+      continue
+    }
+
+    out += char
+    if (!/\s/.test(char)) previous = char
+    index += 1
+  }
+
+  return out
+}
+
+/**
+ * True when a `*`-bearing `exports` or `files` pattern names something that exists.
+ *
+ * A pattern is not one path, so the exact-path check has to skip it — and without this, a
+ * package could point `./locale/*.json` at a directory that no longer holds a locale file,
+ * break every consumer import, and still pass this suite. Both shapes npm uses are handled:
+ * a single star inside one directory, and a `**` that may sit below it.
+ */
+async function patternMatches(pattern: string): Promise<boolean> {
+  const normalized = pattern.replace(/^\.\//, '')
+  const starAt = normalized.indexOf('*')
+  const directory = normalized.slice(0, starAt).replace(/\/$/, '')
+  const suffix = normalized.slice(starAt).replace(/^[*\/]+/, '')
+  if (!exists(path.join(root, directory))) return false
+  const recursive = normalized.slice(starAt).startsWith('**')
+  const candidates = recursive
+    ? await walk(directory, () => true)
+    : (await fs.readdir(path.join(root, directory), { withFileTypes: true }))
+        .filter((entry) => entry.isFile())
+        .map((entry) => entry.name)
+  return candidates.some((candidate) => candidate.endsWith(suffix))
 }
 
 /** Every path an `exports` value names, at any depth of condition nesting. */
@@ -278,7 +381,7 @@ await check('every relative import names a file that exists, and the runtime imp
 
   const found: Array<{ file: string; specifier: string }> = []
   for (const file of sources) {
-    const source = codeLines(await read(file))
+    const source = withoutComments(await read(file))
     for (const clause of [fromClause, bareClause, dynamicClause]) {
       for (const match of source.matchAll(clause)) {
         // A specifier built by interpolation cannot be resolved here; the build would have to
@@ -350,8 +453,10 @@ await check('the packaging names artifacts a build emits', async () => {
 
   for (const [key, value] of Object.entries(exportsField)) {
     for (const named of exportPaths(value)) {
-      if (named.includes('*')) continue // `./locale/*.json` is a pattern, not one path.
-      assert.ok(isFile(path.join(root, named)), `exports["${key}"] names ${named}, which is not a file that exists`)
+      // `./locale/*.json` is a pattern rather than one path, and a pattern that matches
+      // nothing is this case's failure as much as a path that does not exist.
+      const ok = named.includes('*') ? await patternMatches(named) : isFile(path.join(root, named))
+      assert.ok(ok, `exports["${key}"] names ${named}, which does not match anything that exists`)
     }
   }
 
@@ -360,8 +465,8 @@ await check('the packaging names artifacts a build emits', async () => {
   const listed = files.filter((entryName): entryName is string => typeof entryName === 'string')
   assert.equal(listed.length, files.length, 'package.json files must contain only strings')
   for (const entryName of listed) {
-    if (entryName.includes('*')) continue // npm allows a glob here, and a glob is not one path.
-    assert.ok(exists(path.join(root, entryName)), `package.json files names ${entryName}, which does not exist`)
+    const ok = entryName.includes('*') ? await patternMatches(entryName) : exists(path.join(root, entryName))
+    assert.ok(ok, `package.json files names ${entryName}, which does not exist`)
   }
 })
 
@@ -373,6 +478,12 @@ await check('every suite and script is run by a package script', async () => {
   // so it has its own script and is deliberately outside `npm test`.
   const testTargets = runTargets('test')
   assert.ok(testTargets.length > 0, 'the `test` script must run something')
+  // The live suite is opt-in precisely because it writes to a real GitHub account: reachable
+  // from `npm test`, an ordinary test run would create and delete real gists for everyone.
+  assert.ok(
+    !testTargets.includes('test/live.test.ts'),
+    'the live suite must stay out of `npm test`; it creates and deletes gists on a real account',
+  )
 
   for (const suite of suites) {
     if (!suite.endsWith('.test.ts')) continue
@@ -411,8 +522,16 @@ await check('the compiler flags this repository depends on are still on', async 
     assert.equal(options[flag], true, `tsconfig.json no longer sets ${flag}`)
   }
 
+  const checkConfig = asMapping(parseJsonc(await read('tsconfig.check.json')), 'tsconfig.check.json')
+  // Inheriting is the only reason an absent flag above is acceptable: without `extends` the
+  // check config has no flags at all, and the type-check half silently stops checking them.
+  assert.equal(
+    checkConfig.extends,
+    './tsconfig.json',
+    'tsconfig.check.json must extend the build config, or the flags below are inherited from nothing',
+  )
   const checkOptions = asMapping(
-    asMapping(parseJsonc(await read('tsconfig.check.json')), 'tsconfig.check.json').compilerOptions ?? {},
+    checkConfig.compilerOptions ?? {},
     'tsconfig.check.json compilerOptions',
   )
   for (const flag of REQUIRED_FLAGS) {
@@ -444,10 +563,14 @@ await check('the declared Node floor is the one CI runs', async () => {
 
   const testStepAt = workflow.findIndex((line) => /^\s*run:\s+npm test\s*$/.test(line))
   assert.ok(testStepAt > 0, 'CI must run `npm test`')
+  // The whole step, not just the lines above `run:`: YAML keys are unordered, so an `if:`
+  // below the command is the same skip as one above it.
   let stepAt = testStepAt
   while (stepAt > 0 && !/^\s*- /.test(workflow[stepAt])) stepAt -= 1
+  let stepEnd = testStepAt
+  while (stepEnd + 1 < workflow.length && !/^\s*- /.test(workflow[stepEnd + 1])) stepEnd += 1
   assert.ok(
-    !workflow.slice(stepAt, testStepAt).some((line) => /^\s*if:/.test(line)),
+    !workflow.slice(stepAt, stepEnd + 1).some((line) => /^\s*if:/.test(line)),
     'the step that runs `npm test` must not be conditional: a skipped leg installs the floor Node and tests nothing on it',
   )
 })

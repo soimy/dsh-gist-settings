@@ -87,8 +87,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   dynamic — names a file that exists rather than a directory, and that the runtime still names `.ts`,
   because that is what the build rewrites and naming `.js` in the source would compile and then refuse to
   load; that no compiled JavaScript is left beside its own source or outside `dist/`; that every string
-  anywhere in `exports`, and every `files` entry, exists after a build; that every suite and script is
-  actually *run* by a package script, with `live` the documented opt-out from `npm test`; that the
+  anywhere in `exports`, and every `files` entry, exists after a build, with `*` patterns required to
+  match something real; that every suite and script is actually *run* by a package script, and that the
+  live suite — which spends a real GitHub token — is not reachable from `npm test`; that the
   compiler flags this repository depends on are on in both tsconfigs; and that `engines.node` is a matrix
   leg CI genuinely runs, not merely a version named somewhere in the workflow. Each case was verified by
   breaking its invariant by hand and watching only that case go red — and the check was verified against

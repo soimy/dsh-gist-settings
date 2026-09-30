@@ -26,9 +26,10 @@ never exercise a stale `dist/`:
 
 The chain is the npm script itself, not `npm run test:*` wrappers, so each step is one `node` process
 reading TypeScript from source. Because it is a chain, the first failing suite stops the run: a report
-that only shows `test/sync.test.ts` failing means nothing after it ran. `test/entry.test.ts` is the only
-suite that *borrows* the build rather than reading the sources, and step 1 is why running the whole chain
-works from a clean checkout. `npm test` does **not** run `npm run typecheck` — that is a separate command
+that only shows `test/sync.test.ts` failing means nothing after it ran. `test/entry.test.ts` and
+`test/guards.test.ts` are the two suites that *borrow* the build rather than reading the sources, and
+step 1 is why running the whole chain works from a clean checkout. `npm test` does **not** run
+`npm run typecheck` — that is a separate command
 locally and a separate CI job.
 
 Nine of the ten suites are in the chain. The tenth, `test/live.test.ts`, is opt-in and never runs as
@@ -171,14 +172,17 @@ requires the resolved path to be a **file** (a directory resolves and then fails
 `.ts`, because that suffix is what the build's `rewriteRelativeImportExtensions` turns into `.js`; naming
 `.js` in the source compiles and then fails to load. The scan reads a wrapped `import {\n…\n} from '…'`,
 a bare `import '…'`, and a dynamic `import('…')` anywhere in an expression, over a copy of the source
-with its full-line comments removed so the examples in this page's own subject are not mistaken for
-imports. `the packaging names artifacts a build emits` walks `exports` recursively, so a condition nested
-inside `exports["."]`, or a subpath nobody can import, cannot name a file that does not exist.
-`every suite and script is run by a package script` resolves the `&&` chain one alias deep and requires a
-segment that actually *runs* the file: `echo skipped test/sync.test.ts` names it without running it.
-`the declared Node floor is the one CI runs` asserts the shape, not a string — the floor is a matrix
-entry with an `os`, the comment naming whose floor it is sits with that leg, and the step running
-`npm test` carries no `if:`, so the floor cannot be installed and skipped.
+with its comments removed — a scanner rather than a line filter, because `//` and both quote characters
+also appear inside strings and regular expressions here, and because a comment that names a path must not
+be mistaken for an import. `the packaging names artifacts a build emits` walks `exports` recursively, so a
+condition nested inside `exports["."]`, or a subpath nobody can import, cannot name a file that does not
+exist, and a `*` pattern has to match something, so `./locale/*.json` cannot point at a directory that
+holds no locale file. `every suite and script is run by a package script` resolves the `&&` chain one
+alias deep and requires a segment that actually *runs* the file — `echo skipped test/sync.test.ts` names
+it without running it — and separately requires the live suite to stay out of `npm test` itself.
+`the declared Node floor is the one CI runs` asserts the shape, not a string: the floor is a matrix entry
+with an `os`, the comment naming whose floor it is sits with that leg, and no line of the step running
+`npm test` carries an `if:`, so the floor cannot be installed and skipped.
 
 **Where it deliberately stops.** Three boundaries are named rather than silent. A hand-written `client.js`
 at the repository root is allowed, because the README documents it there as the settings page the Harness
