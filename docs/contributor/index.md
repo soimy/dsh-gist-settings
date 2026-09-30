@@ -11,7 +11,7 @@ These pages are the long form of that contract, and the place to look before cha
 | --- | --- |
 | [Architecture](architecture.md) | The two-module split, why the Harness loads `dist/`, the compatibility gate, and the data flow of a sync. The source of truth for where logic belongs. |
 | [Development](development.md) | Setup, the build and watch loop, the constraints the type stripper imposes, house style, and the commit and pull-request path. |
-| [Testing](testing.md) | What each of the nine suites proves and why it is shaped that way, the CI shape, and the mutation discipline this repository follows. |
+| [Testing](testing.md) | What each of the ten suites proves and why it is shaped that way, the CI shape, and the mutation discipline this repository follows. |
 | [Release process](release-process.md) | The changelog, the version bump, the tag, and everything the release job verifies before it publishes. |
 | [Documentation rules](documentation.md) | Where each kind of document belongs, the language pairing, and the link rules that `npm test` enforces. |
 

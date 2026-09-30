@@ -16,7 +16,7 @@ README or CONTRIBUTING section owns the summary it expands.
 | The plugin is not loading, or a tool is missing | [Troubleshooting](user/troubleshooting/index.md) |
 | How is it built, and why is there a `dist/`? | [Architecture](contributor/architecture.md) |
 | How do I work on it? | [Development](contributor/development.md) |
-| What do the nine suites prove? | [Testing](contributor/testing.md) |
+| What do the ten suites prove? | [Testing](contributor/testing.md) |
 | How is a release cut? | [Release process](contributor/release-process.md) |
 | How should documentation be written here? | [Documentation rules](contributor/documentation.md) |
 | What changed, and when? | [`CHANGELOG.md`](../CHANGELOG.md), indexed by [Releases](releases/index.md) |

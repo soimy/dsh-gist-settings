@@ -73,7 +73,7 @@ repository — runtime, tests and scripts — through `tsconfig.check.json` with
 regenerated output: never edited by hand, never committed. The tests and `scripts/` are TypeScript too,
 and nothing compiles them: Node strips their types as it loads them, which is allowed outside
 `node_modules`, so a single suite still runs as `node test/sync.test.ts` with no build step. Only
-`test/entry.test.ts` needs `dist/`, and `npm test` builds before it runs.
+`test/entry.test.ts` and `test/guards.test.ts` read `dist/`, and `npm test` builds before they run.
 
 To run it against a real profile, install the working copy as a bundle. `install_bundle` links the
 directory, so what a reload picks up is `dist/`: an edit to `index.ts` or `lib/core.ts` reaches the
@@ -91,6 +91,7 @@ runs `npm run build` — so a test run cannot exercise a stale `dist/`.
 | Suite | Cases | Proves |
 |---|---|---|
 | `npm run test:entry` | 6 | The boundary a profile actually crosses. Other suites import the sources; this one loads the plugin the way the Cordis loader does — by package name, through `exports` — and pins that the export names the build rather than the sources, that the artifact and its declarations exist, that a registering context gets all four tools with the shape the registry requires, and that the build registers exactly what the source does. A wrong export, a missing or stale `dist/`, or an entry that loads and registers nothing each fail it. |
+| `npm run test:guards` | 7 | The repository's own invariants, which no behavioural suite can see. It discovers every `.ts` file in the tree rather than listing them, and asserts that each still survives Node's own type stripper; that every relative import — single-line, wrapped, bare or dynamic — names a file that exists (a directory is not a file), and that the runtime still names `.ts`; that no compiled JavaScript is left beside its own source or outside `dist/`; that every string anywhere in `exports`, and every `files` entry, exists after a build; that every suite and script is actually *run* by a package script, `live` being the documented opt-out from `npm test`; that the compiler flags this repository depends on are on in both tsconfigs; and that the declared Node floor is a matrix leg CI genuinely runs. Each case was verified by breaking its invariant by hand and watching only that case go red. |
 | `npm run test:sync` | 19 | The engine's whole lifecycle against an in-memory `gh`: create, upload, divergence, download, backup, pruning, recreation, idempotency. |
 | `npm run test:tools` | 23 | The tool layer: registration, argument validation, config validation at load, profile-name resolution, and that one failing profile never aborts the others. |
 | `npm run test:schema` | 50 | The hand-written definitions against the Harness's *own* validators — the registration contract, the supported JSON Schema subset, argument validation, and that each returned value satisfies its declared output schema — plus the loader's compatibility gate, called on this repository's `package.json` so a peer declaration the installed runtime cannot satisfy fails here rather than in a user's profile. |
@@ -303,7 +304,7 @@ npm test                        # 先经由 `pretest` 构建，再跑各套件�
 
 插件没有**运行时**依赖：它刻意不 import Harness 安装目录里的任何东西，除 `node:` 外不 import 任何东西，也不自带任何依赖，因此各套件本身只使用 Node 内置模块。那次安装装的是构建工具链——类型检查器与构建——形式是精确锁定的 devDependencies；而 `--include=dev` 正是让它真的发生：只要 `NODE_ENV=production`，npm 就会跳过 devDependencies，那次安装会以退出码 0 结束、什么都没装，于是要到后面才发现 `tsc` 不见了。
 
-`index.ts` 与 `lib/core.ts` 是源码，而 Harness 加载 `dist/`。profile 是通过**它自己 `node_modules` 里的 junction** 抵达这个包的，而 Node 拒绝对任何解析到 `node_modules` 下的文件做类型擦除——它会抛 `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`——所以这个包无法"直接跑 TypeScript"。`npm run build` 负责编译（`tsc -p tsconfig.json`），`npm run build:watch` 是同一件事的监听模式，`npm run typecheck` 则通过 `tsconfig.check.json` 对整个仓库——运行时、测试与脚本——做检查且不产出文件。`dist/` 是重新生成的产物：不手工编辑，也不提交。各套件与 `scripts/` 同样是 TypeScript，也没有任何东西编译它们：Node 在加载时擦除它们的类型，而这在 `node_modules` 之外是允许的——所以单套件仍然可以 `node test/sync.test.ts` 这样跑，不需要构建；只有 `test/entry.test.ts` 需要 `dist/`，而 `npm test` 会先构建。
+`index.ts` 与 `lib/core.ts` 是源码，而 Harness 加载 `dist/`。profile 是通过**它自己 `node_modules` 里的 junction** 抵达这个包的，而 Node 拒绝对任何解析到 `node_modules` 下的文件做类型擦除——它会抛 `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`——所以这个包无法"直接跑 TypeScript"。`npm run build` 负责编译（`tsc -p tsconfig.json`），`npm run build:watch` 是同一件事的监听模式，`npm run typecheck` 则通过 `tsconfig.check.json` 对整个仓库——运行时、测试与脚本——做检查且不产出文件。`dist/` 是重新生成的产物：不手工编辑，也不提交。各套件与 `scripts/` 同样是 TypeScript，也没有任何东西编译它们：Node 在加载时擦除它们的类型，而这在 `node_modules` 之外是允许的——所以单套件仍然可以 `node test/sync.test.ts` 这样跑，不需要构建；只有 `test/entry.test.ts` 与 `test/guards.test.ts` 会读 `dist/`，而 `npm test` 会先构建。
 
 要在真实 profile 上运行，把工作副本作为 bundle 安装即可。`install_bundle` 用的是符号链接，所以重载拿到的是 `dist/`：对 `index.ts` 或 `lib/core.ts` 的改动要等重新构建之后才会到达运行中的 Harness——这正是 `npm run build:watch` 的用途。
 
@@ -318,6 +319,7 @@ plugin_manager  action: install_bundle  target: <此仓库的绝对路径>
 | 套件 | 用例数 | 证明的内容 |
 |---|---|---|
 | `npm run test:entry` | 6 | profile 真正跨过的那道边界。其他套件 import 源码；这一套按 Cordis loader 的方式加载插件 —— 按包名、经 `exports` —— 并钉住：export 指向的是构建产物而非源码、产物与其声明文件存在、注册的上下文拿到四个工具且形状满足注册要求、产物注册的内容与源码完全一致。export 写错、`dist/` 缺失或陈旧、入口加载成功却不注册工具，都会让它失败。 |
+| `npm run test:guards` | 7 | 仓库自身的不变量，行为套件一条也看不见。它遍历整棵树里的每个 `.ts` 文件（而不是写死一份清单），断言：每个文件仍能被 Node 自带的类型擦除器处理；每条相对 import —— 单行、折行、bare、动态 —— 都指向真实存在的文件（目录不算文件），且运行时仍写 `.ts`；没有任何编译出来的 JavaScript 落在源码旁边或 `dist/` 之外；`exports` 里任意层级、以及 `files` 里的每个路径都在构建后真实存在；每个套件与脚本都**真正被**某条 package script 运行（`live` 是 `npm test` 唯一有据可查的例外）；本仓库依赖的编译旗标在两个 tsconfig 里都仍在；声明的 Node 下限就是 CI 真正会跑的那条矩阵支线。每一条都通过手工破坏其不变量、且只让该条变红来验证。 |
 | `npm run test:sync` | 19 | 引擎完整生命周期（内存版 gh）：创建、上传、分叉、下载、备份、清理、重建、幂等。 |
 | `npm run test:tools` | 23 | 工具层：注册、参数校验、加载时的配置校验、profile 名解析、单个 profile 失败不会中断其他。 |
 | `npm run test:schema` | 50 | 手写定义 vs Harness **自带**校验器：注册契约、受支持的 JSON Schema 子集、参数校验、返回值满足声明的输出 schema；外加加载器的兼容性闸门——直接拿本仓库的 `package.json` 去调用，因此一处当前运行时无法满足的 peer 声明会在这里失败，而不是在用户的 profile 里失败。 |

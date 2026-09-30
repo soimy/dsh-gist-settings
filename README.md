@@ -18,7 +18,7 @@ guarded two-way sync are exposed as agent tools, so you can drive them from a co
 | Sync engine (`lib/core.ts`) | Done |
 | Host plugin + agent tools | **Installed and live**; callable from a session |
 | Real GitHub round-trip | **Verified** against a real account |
-| Test suite | **187 offline cases across eight suites, plus 12 live cases**, all passing |
+| Test suite | **194 offline cases across nine suites, plus 12 live cases**, all passing |
 | CI | Offline suites and repository checks on Linux, Windows and macOS, Node 22.19.0, 22.x and 24.x, plus a repository-wide type check |
 | Client settings page | Not started — see [The settings page](#the-settings-page) |
 | Licence | MIT |
@@ -278,7 +278,7 @@ cordis.patch.yml       Bundle patch (inserts the plugin row; documents config)
 client.js              Client settings page (not yet written)
 locale/{en,zh}.json    Plugin display metadata for Plugin Manager cards
 icon.svg               Bundle icon
-test/                  187 offline cases across eight suites, plus 12 live ones
+test/                  194 offline cases across nine suites, plus 12 live ones
 scripts/               check-changelog.ts — validates CHANGELOG.md
 docs/                  Long-form documentation: user/ and contributor/ pages, releases index, plans, specs
 .github/               Issue forms and the pull-request template
@@ -311,9 +311,10 @@ suite proves — is in [`docs/contributor/`](docs/contributor/index.md).
 npm run build           # tsc -p tsconfig.json → dist/, the JavaScript the Harness loads
 npm run build:watch     # the same, watching — keep it running while you work
 npm run typecheck       # tsc -p tsconfig.check.json: the whole repository, emitting nothing
-npm test                # builds first (pretest), then the eight offline suites (187 cases) plus the
+npm test                # builds first (pretest), then the nine offline suites (194 cases) plus the
                         # changelog and docs checks
 npm run test:entry      # the package export a profile loads: the build, and the four tools it registers
+npm run test:guards     # the invariants nothing else can see: stripping, imports, packaging, the floor
 npm run test:sync       # engine lifecycle against a fake gh
 npm run test:tools      # tool layer, argument validation, failure isolation
 npm run test:schema     # definitions vs. the installed Harness validators
@@ -332,9 +333,9 @@ the package cannot be run as raw TypeScript. `npm run build` instead emits `dist
 and `scripts/` are TypeScript as well, and nothing compiles them: they import the `.ts` sources
 directly and Node strips the types as it loads them, which works for the inverted reason the build
 exists — outside `node_modules`, stripping is allowed. A single suite therefore still runs as
-`node test/sync.test.ts` with no build step; only `test/entry.test.ts` needs `dist/`, and `npm test`
-builds first. `tsconfig.check.json` covers all three — runtime, tests, scripts — so `npm run typecheck`
-fails on a mistyped test exactly as it fails on a mistyped engine.
+`node test/sync.test.ts` with no build step; only `test/entry.test.ts` and `test/guards.test.ts` read
+`dist/`, and `npm test` builds first. `tsconfig.check.json` covers all three — runtime, tests, scripts —
+so `npm run typecheck` fails on a mistyped test exactly as it fails on a mistyped engine.
 
 `test/fake-gh.ts` is an in-memory stand-in for `gh` implementing `--version`, `auth status`, and the
 `/gists` API, with optional injection of truncated files, an untrusted `raw_url` host, HTTP 500s and a

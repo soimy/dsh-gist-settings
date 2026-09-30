@@ -109,7 +109,7 @@ Before opening the pull request, run the two commands the release job will run, 
 runs them:
 
 ```bash
-npm test                          # pretest builds dist/, then eight suites and both repository checks
+npm test                          # pretest builds dist/, then nine suites and both repository checks
 npm run release:notes -- vX.Y.Z   # preview the notes the tag would publish
 ```
 
@@ -230,7 +230,7 @@ Run from a clean checkout of the commit that will be tagged.
    release.
 6. `npm run changelog:check` — it should print the `CHANGELOG.md OK:` line naming the new version as the
    newest release.
-7. `npm test` — the `pretest` build, the eight offline suites, and both repository checks. The live suite
+7. `npm test` — the `pretest` build, the nine offline suites, and both repository checks. The live suite
    is not part of it and is not run by CI either; run `npm run test:live` separately only if the release
    touches the GitHub round trip.
 8. `npm run release:notes -- vX.Y.Z` — read the output. It should be the section body: no `## [x.y.z]`

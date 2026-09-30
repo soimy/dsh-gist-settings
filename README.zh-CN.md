@@ -16,7 +16,7 @@
 | 同步引擎（`lib/core.ts`） | 已完成 |
 | Host 插件 + 4 个 agent 工具 | **已安装并生效**，可在会话中调用 |
 | 真实 GitHub 往返 | **已在真实账号上验证** |
-| 测试 | **八套共 187 项离线用例，另有 12 项真实用例**，全部通过 |
+| 测试 | **九套共 194 项离线用例，另有 12 项真实用例**，全部通过 |
 | CI | 在 Linux、Windows、macOS 上跑离线用例与仓库检查，覆盖 Node 22.19.0、22.x、24.x，另有一项全仓库类型检查 |
 | Client 设置页 | 尚未开始 —— 见[设置页](#设置页) |
 | 许可证 | MIT |
@@ -246,7 +246,7 @@ cordis.patch.yml       bundle 补丁（插入插件行；并记录配置说明�
 client.js              Client 设置页（尚未编写）
 locale/{en,zh}.json    Plugin Manager 卡片用的展示元数据
 icon.svg               bundle 图标
-test/                  八套共 187 项离线用例，另有 12 项真实用例
+test/                  九套共 194 项离线用例，另有 12 项真实用例
 scripts/               check-changelog.ts —— 校验 CHANGELOG.md
 docs/                  长文文档：user/ 与 contributor/ 页面、发行索引、计划、设计规格
 .github/               Issue 表单与 PR 模板
@@ -278,8 +278,9 @@ docs/                  长文文档：user/ 与 contributor/ 页面、发行索�
 npm run build           # tsc -p tsconfig.json → dist/，即 Harness 加载的 JavaScript
 npm run build:watch     # 同上，持续监听 —— 开发时让它一直跑着
 npm run typecheck       # tsc -p tsconfig.check.json：检查整个仓库，不产出文件
-npm test                # 先构建（pretest），再跑八套离线用例（187 项）与 CHANGELOG、文档链接检查
+npm test                # 先构建（pretest），再跑九套离线用例（194 项）与 CHANGELOG、文档链接检查
 npm run test:entry      # profile 实际加载的 package export：构建产物，以及它注册的四个工具
+npm run test:guards     # 其他套件看不见的不变量：类型擦除、import、打包、引擎下限
 npm run test:sync       # 用假 gh 跑引擎完整生命周期
 npm run test:tools      # 工具层、参数校验、故障隔离
 npm run test:schema     # 定义 vs. Harness 自带校验器
@@ -296,9 +297,9 @@ npm run test:live       # 需显式开启：真实 GitHub
 指向 `./dist/index.js`；`dist/` 是重新生成的产物，不手工编辑，也不提交。各套件与 `scripts/` 同样是
 TypeScript，而且没有任何东西编译它们：它们直接 import 那些 `.ts` 源码，由 Node 在加载时擦除类型 ——
 成立的原因正好相反：在 `node_modules` 之外，擦除是允许的。所以单套件仍然可以
-`node test/sync.test.ts` 这样跑，不需要构建；只有 `test/entry.test.ts` 需要 `dist/`，而 `npm test`
-会先构建。`tsconfig.check.json` 同时覆盖运行时、测试与脚本，因此 `npm run typecheck` 会因为一处写错的
-测试而失败，正如它会因为一处写错的引擎代码而失败。
+`node test/sync.test.ts` 这样跑，不需要构建；只有 `test/entry.test.ts` 与 `test/guards.test.ts` 会读
+`dist/`，而 `npm test` 会先构建。`tsconfig.check.json` 同时覆盖运行时、测试与脚本，因此 `npm run typecheck`
+会因为一处写错的测试而失败，正如它会因为一处写错的引擎代码而失败。
 
 `test/fake-gh.ts` 是 `gh` 的内存替身，实现了 `--version`、`auth status` 和 `/gists` 接口，并可选
 注入"截断文件""不可信的 `raw_url` 主机""HTTP 500""未登录的 CLI"。`sync`、`tools`、`regression`、

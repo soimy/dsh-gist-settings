@@ -9,7 +9,7 @@ maintenance rather than an outage, fix the two open issue reports — the per-de
 still open: a guard suite, repository hygiene, and the settings page.
 
 **Context:** Everything merged since `0.2.0` is still under `[Unreleased]`. In that window the
-runtime moved to TypeScript and started compiling into `dist/`; the nine suites and three scripts
+runtime moved to TypeScript and started compiling into `dist/`; the suites and the three scripts
 moved to TypeScript and run from source under Node's type stripper; CI gained a repository-wide
 type-check job and a schema job that installs every declared dsh version and runs the loader's own
 compatibility gate; the peer declaration became an enumerated list after dsh `0.2.0-rc.2` skipped the
@@ -74,7 +74,7 @@ build log. This is the cheapest task here and it gates the release: it is the on
 **Files:** none required. If the restart turns up a surprise, the fix belongs with the code that
 caused it, and a note belongs in `docs/user/troubleshooting/index.md`.
 
-- [ ] **Step 1: Confirm a running Harness loads the bundle again**
+- [x] **Step 1: Confirm a running Harness loads the bundle again**
 
   Run: `dsh --profile dsh-tui --dump-config`
   Expected: no `skipping profile bundle` line, and a `dsh-gist-settings` row in the composed
@@ -87,7 +87,7 @@ caused it, and a note belongs in `docs/user/troubleshooting/index.md`.
   bundle was skipped has no `gist_*` tools at all, so this is the proof that the restart picked the
   fix up.
 
-- [ ] **Step 3: Run the live suite once against the migrated source**
+- [x] **Step 3: Run the live suite once against the migrated source**
 
   Run: `$env:DSH_GIST_LIVE_TEST='1'; npm run test:live`
   Expected: 12/12 passed. It creates and deletes a real secret gist.
@@ -109,41 +109,41 @@ directory can break silently.
 `test` chain), then the counts in `CONTRIBUTING.md` and both READMEs, `docs/contributor/testing.md`,
 and a `CHANGELOG.md` entry.
 
-- [ ] **Step 1: Every TypeScript file still strips**
+- [x] **Step 1: Every TypeScript file still strips**
 
   Run `module.stripTypeScriptTypes` over `index.ts`, `lib/**/*.ts`, `test/**/*.ts` and
   `scripts/**/*.ts`.
   Expected: no throw. `erasableSyntaxOnly` protects this at compile time; nothing protects it at
   runtime, and a `.ts` file that fails to strip fails only when someone runs it.
 
-- [ ] **Step 2: Every relative import names a file that exists**
+- [x] **Step 2: Every relative import names a file that exists**
 
   Expected: no import in those files resolves to nothing, and the runtime's imports still end in
   `.ts` rather than `.js`.
 
-- [ ] **Step 3: No stray JavaScript**
+- [x] **Step 3: No stray JavaScript**
 
   Expected: no `.js` or `.mjs` file under `test/` or `scripts/`, and none at the root — `dist/` and
   `node_modules` are the only places compiled output may live.
 
-- [ ] **Step 4: The packaging points at things that exist**
+- [x] **Step 4: The packaging points at things that exist**
 
   Expected: every path in `exports` and `files` exists after `npm run build`, and `exports["."]`
   still names `./dist/index.js` rather than a source file. This is the boundary the entry suite
   crosses; this case is what catches a rename that breaks it.
 
-- [ ] **Step 5: Nothing is written that nobody runs**
+- [x] **Step 5: Nothing is written that nobody runs**
 
   Expected: every `test/*.test.ts` and `scripts/*.ts` is named by a package script. `live` is the
   one documented exception — it is opt-in by design.
 
-- [ ] **Step 6: The compiler flags that make stripping safe are still on**
+- [x] **Step 6: The compiler flags that make stripping safe are still on**
 
   Expected: `erasableSyntaxOnly`, `verbatimModuleSyntax`, `rewriteRelativeImportExtensions`,
   `isolatedModules` and `strict` are all present in `tsconfig.json`. A silent removal turns the
   whole model off without failing anything else.
 
-- [ ] **Step 7: The engine floor is still the Harness's floor**
+- [x] **Step 7: The engine floor is still the Harness's floor**
 
   Expected: `engines.node` is `^22.19 || >=24`, with a comment saying whose floor it is. The CI
   matrix already proves the code runs there; this case is what stops the declared floor drifting
@@ -151,6 +151,25 @@ and a `CHANGELOG.md` entry.
 
   Run: `npm test`
   Expected: one more suite, and every count updated to match.
+
+**As implemented, after an independent review.** The steps above state the requirement; the suite is
+slightly wider and narrower in four places, all of them recorded here rather than only in the code:
+
+- The subjects are **discovered**, not listed: every `.ts` file in the tree outside `dist/`,
+  `node_modules/`, `.git/` and `.worktrees/`. A hard-coded `index.ts` + `lib/` + `test/` + `scripts/`
+  list left a new source in any other directory silently unchecked.
+- Step 5's "named by a package script" became "**run** by one". A substring test passed on
+  `echo skipped test/sync.test.ts`, which names the file and never runs it.
+- Step 4's walk is recursive through `exports`, because a condition nested inside `exports["."]` or a
+  subpath nobody can import could otherwise name a file that does not exist.
+- Step 7 asserts the **shape** of the CI leg — a matrix entry with an `os`, whose explanatory comment
+  sits with it, and a step that runs `npm test` with no `if:` — rather than the presence of a version
+  string, which a skipped leg or a comment moved elsewhere in the file also satisfies.
+
+Two boundaries are deliberate and named in the suite and in
+[Testing](../contributor/testing.md): a hand-written root `client.js` is not compiled output and is
+allowed, and a `.tsx`/`.jsx` source cannot be executed by Node's type stripper at all, so these cases
+do not claim to cover one.
 
 ### Task 3: Release 0.3.0
 
