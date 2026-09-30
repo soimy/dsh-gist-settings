@@ -64,6 +64,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `tsc`. The Harness install action passes the same flag, and now anchors its package resolution at
   `package.json` rather than at the `index.js` that no longer exists.
 
+### Fixed
+
+- **The plugin loads on dsh 0.2.0-rc.2 again.** `peerDependencies` named one exact version,
+  `0.1.7-rc.2`, and the Harness's compatibility gate reads only that declaration: when the installed
+  dsh does not satisfy it the bundle is skipped before any of its code runs, which is the
+  `dsh: skipping profile bundle` message. The declaration is now the verified list
+  `0.1.7-rc.2 || 0.2.0-rc.2`, and the `schema` job installs every version in it, so a declared target
+  cannot go unproven. Nothing inside the plugin changed: `test/schema.test.ts` replayed the
+  0.2.0-rc.2 validators without an edit, 49/49, which is what makes this a declaration fix rather than
+  a port.
+
 ## [0.2.0] - 2026-09-28
 
 Defects found by a re-review of the fixes below

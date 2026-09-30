@@ -253,8 +253,12 @@ this, and `test/live.test.ts` round-trips a 1.5 MB file against real GitHub to p
 **No imports from the Harness installation.** Tool definitions are written as plain objects matching
 the shape `defineTool` produces. This keeps the bundle immune to module-resolution changes;
 `test/schema.test.ts` replays the Harness's own validators so the definitions cannot silently drift
-out of contract. The trade-off is that the Harness's version gate cannot see the plugin either, so
-`peerDependencies` pins the DSH version it was written against.
+out of contract. The trade-off is that the Harness's version gate cannot see the plugin either: it
+reads only `peerDependencies`, and it skips the whole bundle when the installed dsh does not satisfy
+that declaration. The declaration is therefore the list of DSH versions this plugin has been verified
+against — `0.1.7-rc.2 || 0.2.0-rc.2` — spelled out rather than written as a range, because the platform
+ships prereleases and semver's `^` does not cross them: `^0.1.7-rc.2` stops below `0.2.0-rc.2`. The
+`schema` job installs every version in that list.
 
 **A secret gist URL is a bearer read capability.** Anyone holding the URL can read a secret gist, and
 the tools return that URL in their output, which becomes part of the conversation transcript. Treat
