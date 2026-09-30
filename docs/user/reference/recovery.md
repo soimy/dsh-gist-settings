@@ -145,10 +145,15 @@ read. The profile then reads as `not tracked`, and the next upload mints a secon
 therefore keep a valid `gistId`.
 
 **To recover from a malformed file:** repair it by hand, or move it aside and copy `state.json.bak` over
-it — that is the previous revision, written before the last successful replace, and it exists only when
-there was a previous revision to copy. Then run `gist_status` to see what the plugin now believes. Both
-routes are safe with respect to GitHub: the gists the file named are untouched, and their URLs are in the
-file itself and in the tool output that created them.
+it. Repairing by hand is the safer of the two, because the backup is best-effort rather than guaranteed:
+`saveState` copies the previous revision to `state.json.bak` before it replaces the file, but a copy that
+fails is swallowed, so the backup can be missing entirely or older than the revision you are replacing.
+Look at it before you use it — its timestamp, and the profile names and `gistId`s inside it — and keep
+the current file's records if the backup names fewer gists than you expect. Restoring an older revision
+loses the records it does not have, and the next upload of a profile with no recorded `gistId` mints a
+second gist. Then run `gist_status` to see what the plugin now believes. Either route is safe with
+respect to GitHub: the gists the file named are untouched, and their URLs are in the file itself and in
+the tool output that created them.
 
 A state **write** that fails is reported differently, because the work it was recording has already
 happened:

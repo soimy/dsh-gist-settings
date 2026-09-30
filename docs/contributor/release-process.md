@@ -82,7 +82,7 @@ The checks, in the order the script makes them:
 
 ## Preparing the release
 
-The convention is one pull request that does three things, and nothing else:
+The convention is one pull request that does four things, and nothing else:
 
 1. Rename `## [Unreleased]` to `## [x.y.z] - YYYY-MM-DD` and leave a fresh, empty, undated
    `## [Unreleased]` as the first heading.
@@ -90,15 +90,20 @@ The convention is one pull request that does three things, and nothing else:
    `[Unreleased]` compare base to the new tag. `[Unreleased]` compares `vX.Y.Z...HEAD`; the released
    entry points at `.../releases/tag/vX.Y.Z`.
 3. Set `"version"` in [`package.json`](../../package.json) to `x.y.z`.
+4. Move the two pages that name a version in prose: add the row to [the release index](../releases/index.md)
+   and point [the latest alias](../releases/latest.md) at the new section. No check covers these two, so
+   a release that forgets them leaves a reader on the old version while every command below still passes.
 
-`npm run changelog:check` fails until all three agree, which is the point: the checker ties the version,
-the dated heading and the link definitions together, so a partial bump cannot pass `npm test`.
+`npm run changelog:check` fails until the first three agree, which is the point: the checker ties the
+version, the dated heading and the link definitions together, so a partial bump cannot pass `npm test`.
 
 The 0.2.0 release is what this looks like in history. One commit, `chore: release 0.2.0`, on a branch
 named `release/0.2.0`, touching only `CHANGELOG.md` and `package.json`: the `[Unreleased]` heading
 became `## [0.2.0] - 2026-09-28`, a new `[Unreleased]` went above it, the compare base moved from
 `v0.1.0` to `v0.2.0`, and a `[0.2.0]` link definition was added. `chore` is one of the prefixes in use
 for commits here; the subject convention is in [CONTRIBUTING.md](../../CONTRIBUTING.md#commit-messages).
+That release predates `docs/releases/`, which is why two files were enough; step 4 is what the same
+commit has to touch now.
 
 Before opening the pull request, run the two commands the release job will run, in the same order it
 runs them:
@@ -219,24 +224,28 @@ Run from a clean checkout of the commit that will be tagged.
 3. Both link definitions exist at the bottom, exactly once each, and the `[Unreleased]` compare base has
    moved to the new tag.
 4. `package.json` says `"version": "x.y.z"`.
-5. `npm run changelog:check` — it should print the `CHANGELOG.md OK:` line naming the new version as the
+5. [The release index](../releases/index.md) has a row for `x.y.z` and
+   [the latest alias](../releases/latest.md) points at its section. Neither is checked by anything, so
+   this is the one step that fails silently if it is skipped: the pages simply keep naming the previous
+   release.
+6. `npm run changelog:check` — it should print the `CHANGELOG.md OK:` line naming the new version as the
    newest release.
-6. `npm test` — the `pretest` build, the eight offline suites, and both repository checks. The live suite
+7. `npm test` — the `pretest` build, the eight offline suites, and both repository checks. The live suite
    is not part of it and is not run by CI either; run `npm run test:live` separately only if the release
    touches the GitHub round trip.
-7. `npm run release:notes -- vX.Y.Z` — read the output. It should be the section body: no `## [x.y.z]`
+8. `npm run release:notes -- vX.Y.Z` — read the output. It should be the section body: no `## [x.y.z]`
    heading, and none of the link definitions from the bottom of the file.
-8. Commit as `chore: release X.Y.Z`, open the pull request, and merge it. The 0.2.0 release commit
-   touched only `CHANGELOG.md` and `package.json`; a behaviour or configuration change belongs to the
-   pull request that introduces it, where both READMEs have to be updated with it.
-9. After the merge, tag the commit and push the tag:
+9. Commit as `chore: release X.Y.Z`, open the pull request, and merge it. The commit touches the
+   changelog, `package.json` and the two release pages, and nothing else; a behaviour or configuration
+   change belongs to the pull request that introduces it, where both READMEs have to be updated with it.
+10. After the merge, tag the commit and push the tag:
 
    ```bash
    git tag vX.Y.Z
    git push origin vX.Y.Z
    ```
 
-10. Watch the Release workflow. It re-runs `npm test` and `npm run typecheck` on the tagged commit,
+11. Watch the Release workflow. It re-runs `npm test` and `npm run typecheck` on the tagged commit,
     regenerates the notes, and only then publishes. A failure before the publish step leaves no release
     behind at all: the notes step writes nothing to stdout when it refuses, and the publish step is the
     last one in the job, so the log of the failed step names the reason.
