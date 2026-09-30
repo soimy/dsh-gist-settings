@@ -49,9 +49,14 @@ jobs:
       - uses: ./.github/actions/install-harness
 
       # Exactly what CI runs, on the commit the tag points at — including the schema
-      # contract, which has a Harness to run against here.
+      # contract, which has a Harness to run against here. The type check is part of that
+      # set: `npm test` builds the runtime without checking the suites or the scripts, so
+      # without it a tag could publish a commit that CI's own `typecheck` job rejects.
       - name: Offline suites and repository checks
         run: npm test
+
+      - name: Type-check the whole repository
+        run: npm run typecheck
 
       - name: Generate the notes from the changelog section
         run: node scripts/release-notes.ts "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"

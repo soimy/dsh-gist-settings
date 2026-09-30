@@ -80,6 +80,35 @@ jobs:
       - name: Offline suites and repository checks
         run: npm test
 
+  # The gap the matrix cannot close. `npm test` compiles the runtime — `pretest` runs
+  # `tsc -p tsconfig.json` — but the suites and the scripts are never compiled: Node
+  # erases their types as it loads them, and erasing is not checking. A mistyped test
+  # therefore passes every leg above and fails only `npm run typecheck`.
+  #
+  # One leg rather than seven: the compiler reads the same files and the same pinned
+  # `@types/node` wherever it runs, so the other six would repeat a single answer. It
+  # runs on the floor because that is also the version the release job publishes from,
+  # and that job runs this same command before it publishes.
+  typecheck:
+    name: Type-check the runtime, the tests and the scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+        with:
+          # Nothing here pushes, and the release job installs an external dependency tree
+          # afterwards: do not leave the checkout token in the local git config.
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.0.4
+        with:
+          node-version: '22.19.0'
+      # The same exact-pinned toolchain the matrix installs, for the same reason: the
+      # type checker is a devDependency, and an install that omits it exits 0.
+      - name: Install the pinned toolchain
+        run: npm install --include=dev --no-audit --no-fund
+      - name: Type-check the whole repository
+        run: npm run typecheck
+
   schema:
     name: Schema contract against a real Harness install
     runs-on: ubuntu-latest
