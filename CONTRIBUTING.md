@@ -135,7 +135,13 @@ Three things about it are deliberate:
   and a decision to spend it. Run it yourself with `npm run test:live` when a change touches the API
   round trip; it deletes every gist it creates.
 
-The second job, `schema`, is separate on purpose. `test/schema.test.ts` checks the hand-written tool
+The `typecheck` job closes the gap the matrix cannot see. `npm test` builds the runtime through its
+`pretest` step, but it never compiles the suites or the scripts: Node erases their types as it loads
+them, and erasing is not checking. A mistyped test therefore passes all seven legs above and fails only
+`npm run typecheck`. That job runs the same command once, on the floor, where the runtime, every suite
+and every script are checked together.
+
+The `schema` job is separate on purpose. `test/schema.test.ts` checks the hand-written tool
 definitions against the Harness's *own* validators, so it needs a Harness installation — and no runner
 has one. It installs the version named in `peerDependencies` (so the contract and the declared target
 cannot drift) and runs that suite against it. The matrix, meanwhile, opts into the suite's explicit skip
@@ -331,7 +337,9 @@ plugin_manager  action: install_bundle  target: <此仓库的绝对路径>
 - **关掉了 `fail-fast`。** 一个平台失败不会取消其他平台——「哪个平台不同意」通常就是全部诊断信息。
 - **CI 里不含真实用例。** 它会写入真实 GitHub 账号，因此需要一个 `gist` 权限的 token，以及决定去花它的人。改动涉及 API 往返时请自己跑 `npm run test:live`；它会删除自己创建的每一个 gist。
 
-第二个任务 `schema` 是刻意独立的。`test/schema.test.ts` 拿手写的工具定义去撞 Harness **自带**的校验器，因此需要一份 Harness 安装——而运行器上没有。它会安装 `peerDependencies` 里声明的那个版本（这样契约与声明的目标版本不会漂移），并用它跑这套校验。与此同时，矩阵那边选择接受这套件的显式跳过（`DSH_ALLOW_SCHEMA_SKIP=1`，日志里会打印 `SKIP:` 行），从而让其余用例仍然在全部十条支线上跑。这个跳过是**日志里看得见的**，而不是静默的，因为一个 quietly 什么都不跑的契约检查读起来像是覆盖到了。
+`typecheck` 任务补上的是矩阵看不见的那个缺口。`npm test` 通过 `pretest` 构建运行时，但它从不编译各套件与脚本：Node 在加载时擦除它们的类型，而擦除不等于检查。因此一处写错的测试会在上面全部七条支线上通过，只在 `npm run typecheck` 上失败。这个任务把同一条命令跑一次，跑在下限版本上，在那里运行时、每一个套件与每一个脚本被一起检查。
+
+`schema` 任务也是刻意独立的。`test/schema.test.ts` 拿手写的工具定义去撞 Harness **自带**的校验器，因此需要一份 Harness 安装——而运行器上没有。它会安装 `peerDependencies` 里声明的那个版本（这样契约与声明的目标版本不会漂移），并用它跑这套校验。与此同时，矩阵那边选择接受这套件的显式跳过（`DSH_ALLOW_SCHEMA_SKIP=1`，日志里会打印 `SKIP:` 行），从而让其余用例仍然在全部十条支线上跑。这个跳过是**日志里看得见的**，而不是静默的，因为一个 quietly 什么都不跑的契约检查读起来像是覆盖到了。
 
 这份安装逻辑放在唯一的 composite action（`.github/actions/install-harness`）里，发布任务也复用它。有两个任务需要 Harness，它们就不该各自发明一套拿 Harness 的办法——尤其发布任务**不能**沿用矩阵的那个跳过，所以那边的 `npm test` 会真的执行 schema 契约。
 

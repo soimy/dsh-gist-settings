@@ -49,6 +49,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   compare a stale artifact either.
 - **`npm run typecheck`**, which checks the runtime, the tests and the scripts together through
   `tsconfig.check.json` and emits nothing.
+- **A CI job that runs it.** `npm test` builds the runtime through its `pretest` step, but it never
+  compiles the suites or the scripts — Node erases their types as it loads them, and erasing is not
+  checking — so a mistyped test passed every leg of the matrix and failed only `npm run typecheck`. The
+  new `typecheck` job closes that on a single leg, and the release job runs the same command before it
+  publishes, so a tag cannot ship a commit CI would reject.
 - **A build before every test run.** `npm test` compiles first through its `pretest` step, so the
   suites cannot pass against a stale `dist/`.
 - **`npm run build:watch`**, and the documentation that goes with it: the live Harness loads `dist/`,

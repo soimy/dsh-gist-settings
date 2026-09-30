@@ -19,7 +19,7 @@ guarded two-way sync are exposed as agent tools, so you can drive them from a co
 | Host plugin + agent tools | **Installed and live**; callable from a session |
 | Real GitHub round-trip | **Verified** against a real account |
 | Test suite | **186 offline cases across eight suites, plus 12 live cases**, all passing |
-| CI | Offline suites and repository checks on Linux, Windows and macOS, Node 22.19.0, 22.x and 24.x |
+| CI | Offline suites and repository checks on Linux, Windows and macOS, Node 22.19.0, 22.x and 24.x, plus a repository-wide type check |
 | Client settings page | Not started — see [The settings page](#the-settings-page) |
 | Licence | MIT |
 
