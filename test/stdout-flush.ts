@@ -22,8 +22,30 @@ import fs from 'node:fs'
 /** Never let the response sit undelivered forever. */
 export const FLUSH_TIMEOUT_MS = 5_000
 
+/** The stdout-like sink this module waits on: queue the body, then call back once drained. */
+interface FlushWriter {
+  write(text: string, callback: () => void): void
+}
+
+/** The stderr-like sink the give-up message goes to; only a whole-message write is used. */
+interface StderrWriter {
+  write(text: string): void
+}
+
+/**
+ * Everything `flushThenExit` touches, each hook injectable so the give-up branch can be
+ * exercised by a double that is not a real stream.
+ */
+interface FlushOptions {
+  code?: number
+  timeoutMs?: number
+  write?: FlushWriter
+  stderr?: StderrWriter
+  exit?: (code: number) => void
+}
+
 /** Written synchronously, because it has to survive the exit on the next line. */
-const synchronousStderr = { write: (text) => fs.writeSync(2, text) }
+const synchronousStderr: StderrWriter = { write: (text) => fs.writeSync(2, text) }
 
 export async function flushThenExit({
   code = 0,
@@ -31,7 +53,7 @@ export async function flushThenExit({
   write = process.stdout,
   stderr = synchronousStderr,
   exit = process.exit,
-} = {}) {
+}: FlushOptions = {}) {
   const flushed = await new Promise((resolve) => {
     // Deliberately not unref'd: a flush that never finishes has to reach this
     // timeout and fail, not drain the event loop and exit 0.

@@ -13,9 +13,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - **The plugin's own source is now TypeScript.** `index.ts` and `lib/core.ts` replace `index.js` and
-  `lib/core.js`. The tests and `scripts/` stay plain ESM and import those sources directly, because
-  Node does strip types for files outside `node_modules`. The engine's behaviour is unchanged — this
-  entry describes a change of notation, and nothing a user of the four tools can observe.
+  `lib/core.js`. The engine's behaviour is unchanged — this entry describes a change of notation, and
+  nothing a user of the four tools can observe.
+- **The suites and the scripts are TypeScript as well.** `test/` and `scripts/` moved from `.mjs` to
+  `.ts`, and nothing compiles them: `node test/sync.test.ts` runs on Node's own type stripping, for the
+  same reason the plugin's sources can be run from source — both live outside `node_modules`. What a
+  contributor gains is that `npm run typecheck` checks them for real; `tsconfig.check.json` had always
+  included `test/**/*.ts` and `scripts/**/*.ts`, and this is the change that makes those patterns match
+  something. The 186 cases, the module graph and the generated fixtures are otherwise unchanged: it is
+  the same command list with new extensions. Entries below describe released versions, and keep the
+  names those files had at the time.
 - **The Harness loads compiled JavaScript, because it has to.** Shipping the `.ts` files and letting
   Node strip them at load was measured before a single annotation was written, and it fails: a profile
   reaches this package through a junction inside the profile's own `node_modules`, and Node refuses to
@@ -30,7 +37,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **A package-entry suite**, `test/entry.test.mjs`, part of `npm test`: the runtime entry moved from
+- **A package-entry suite**, `test/entry.test.ts`, part of `npm test`: the runtime entry moved from
   the sources to `dist/`, and nothing else in the repository crossed that boundary — every other suite
   imports `index.ts` and `lib/core.ts` directly. This one loads the plugin the way the Cordis loader
   does, by package name through `exports`, and pins that the export names the build rather than the
@@ -42,6 +49,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   compare a stale artifact either.
 - **`npm run typecheck`**, which checks the runtime, the tests and the scripts together through
   `tsconfig.check.json` and emits nothing.
+- **A CI job that runs it.** `npm test` builds the runtime through its `pretest` step, but it never
+  compiles the suites or the scripts — Node erases their types as it loads them, and erasing is not
+  checking — so a mistyped test passed every leg of the matrix and failed only `npm run typecheck`. The
+  new `typecheck` job closes that on a single leg, and the release job runs the same command before it
+  publishes, so a tag cannot ship a commit CI would reject.
 - **A build before every test run.** `npm test` compiles first through its `pretest` step, so the
   suites cannot pass against a stale `dist/`.
 - **`npm run build:watch`**, and the documentation that goes with it: the live Harness loads `dist/`,

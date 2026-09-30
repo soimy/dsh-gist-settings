@@ -67,9 +67,10 @@ it resolves under `node_modules` — it throws `ERR_UNSUPPORTED_NODE_MODULES_TYP
 package cannot be run as raw TypeScript. `npm run build` compiles it (`tsc -p tsconfig.json`),
 `npm run build:watch` does the same while watching, and `npm run typecheck` checks the whole
 repository — runtime, tests and scripts — through `tsconfig.check.json` without emitting. `dist/` is
-regenerated output: never edited by hand, never committed. The suites and `scripts/` stay plain ESM
-`.mjs` and import the `.ts` sources directly, because Node does strip types outside `node_modules`, so
-a single suite still runs as `node test/sync.test.mjs`.
+regenerated output: never edited by hand, never committed. The tests and `scripts/` are TypeScript too,
+and nothing compiles them: Node strips their types as it loads them, which is allowed outside
+`node_modules`, so a single suite still runs as `node test/sync.test.ts` with no build step. Only
+`test/entry.test.ts` needs `dist/`, and `npm test` builds before it runs.
 
 To run it against a real profile, install the working copy as a bundle. `install_bundle` links the
 directory, so what a reload picks up is `dist/`: an edit to `index.ts` or `lib/core.ts` reaches the
@@ -96,11 +97,11 @@ runs `npm run build` — so a test run cannot exercise a stale `dist/`.
 | `npm run test:release` | 6 | The release-notes script: the success path, and every way it is meant to refuse a tag — a version that disagrees with `package.json`, no dated section, an empty section, a malformed tag. It is the one script here that normally first runs on a tag push, so the refusals matter as much as the success. |
 | `npm run test:live` | 12 | The real GitHub round trip, including a file above the API's truncation threshold. Opt-in, and it deletes every gist it creates. |
 
-`test/schema.test.mjs` **fails** rather than skipping when it cannot find a DSH installation, because
+`test/schema.test.ts` **fails** rather than skipping when it cannot find a DSH installation, because
 a silent skip would leave `npm test` green with none of those checks having run. Set
 `DSH_ALLOW_SCHEMA_SKIP=1` when you are working on something unrelated.
 
-`test/safety.test.mjs` has a skip mechanism, and it reports skips in the summary rather than counting
+`test/safety.test.ts` has a skip mechanism, and it reports skips in the summary rather than counting
 them as passes — a security case that quietly does nothing is worse than no case, because it reads as
 coverage. The cases are written to avoid needing it: where Windows withholds the privilege for a file
 symlink, the same last-segment containment check is exercised with a directory junction.
@@ -134,7 +135,13 @@ Three things about it are deliberate:
   and a decision to spend it. Run it yourself with `npm run test:live` when a change touches the API
   round trip; it deletes every gist it creates.
 
-The second job, `schema`, is separate on purpose. `test/schema.test.mjs` checks the hand-written tool
+The `typecheck` job closes the gap the matrix cannot see. `npm test` builds the runtime through its
+`pretest` step, but it never compiles the suites or the scripts: Node erases their types as it loads
+them, and erasing is not checking. A mistyped test therefore passes all seven legs above and fails only
+`npm run typecheck`. That job runs the same command once, on the floor, where the runtime, every suite
+and every script are checked together.
+
+The `schema` job is separate on purpose. `test/schema.test.ts` checks the hand-written tool
 definitions against the Harness's *own* validators, so it needs a Harness installation — and no runner
 has one. It installs the version named in `peerDependencies` (so the contract and the declared target
 cannot drift) and runs that suite against it. The matrix, meanwhile, opts into the suite's explicit skip
@@ -290,7 +297,7 @@ npm test                        # 先经由 `pretest` 构建，再跑各套件�
 
 插件没有**运行时**依赖：它刻意不 import Harness 安装目录里的任何东西，除 `node:` 外不 import 任何东西，也不自带任何依赖，因此各套件本身只使用 Node 内置模块。那次安装装的是构建工具链——类型检查器与构建——形式是精确锁定的 devDependencies；而 `--include=dev` 正是让它真的发生：只要 `NODE_ENV=production`，npm 就会跳过 devDependencies，那次安装会以退出码 0 结束、什么都没装，于是要到后面才发现 `tsc` 不见了。
 
-`index.ts` 与 `lib/core.ts` 是源码，而 Harness 加载 `dist/`。profile 是通过**它自己 `node_modules` 里的 junction** 抵达这个包的，而 Node 拒绝对任何解析到 `node_modules` 下的文件做类型擦除——它会抛 `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`——所以这个包无法"直接跑 TypeScript"。`npm run build` 负责编译（`tsc -p tsconfig.json`），`npm run build:watch` 是同一件事的监听模式，`npm run typecheck` 则通过 `tsconfig.check.json` 对整个仓库——运行时、测试与脚本——做检查且不产出文件。`dist/` 是重新生成的产物：不手工编辑，也不提交。各套件与 `scripts/` 仍是普通 ESM `.mjs`，直接 import 那些 `.ts` 源码，因为 Node **会**对 `node_modules` 之外的文件做类型擦除——所以单套件仍然可以 `node test/sync.test.mjs` 这样跑。
+`index.ts` 与 `lib/core.ts` 是源码，而 Harness 加载 `dist/`。profile 是通过**它自己 `node_modules` 里的 junction** 抵达这个包的，而 Node 拒绝对任何解析到 `node_modules` 下的文件做类型擦除——它会抛 `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`——所以这个包无法"直接跑 TypeScript"。`npm run build` 负责编译（`tsc -p tsconfig.json`），`npm run build:watch` 是同一件事的监听模式，`npm run typecheck` 则通过 `tsconfig.check.json` 对整个仓库——运行时、测试与脚本——做检查且不产出文件。`dist/` 是重新生成的产物：不手工编辑，也不提交。各套件与 `scripts/` 同样是 TypeScript，也没有任何东西编译它们：Node 在加载时擦除它们的类型，而这在 `node_modules` 之外是允许的——所以单套件仍然可以 `node test/sync.test.ts` 这样跑，不需要构建；只有 `test/entry.test.ts` 需要 `dist/`，而 `npm test` 会先构建。
 
 要在真实 profile 上运行，把工作副本作为 bundle 安装即可。`install_bundle` 用的是符号链接，所以重载拿到的是 `dist/`：对 `index.ts` 或 `lib/core.ts` 的改动要等重新构建之后才会到达运行中的 Harness——这正是 `npm run build:watch` 的用途。
 
@@ -314,9 +321,9 @@ plugin_manager  action: install_bundle  target: <此仓库的绝对路径>
 | `npm run test:release` | 6 | 发布说明脚本：成功路径，以及它**应当拒绝**的每一种 tag —— 版本与 `package.json` 不一致、没有带日期的小节、小节为空、tag 格式不合法。这是本仓库唯一一个通常要到打 tag 才第一次运行的脚本，所以"拒绝"与"成功"同样重要。 |
 | `npm run test:live` | 12 | 真实 GitHub 往返，包含一个超过 API 截断阈值的文件。需显式开启，且会删除自己创建的每一个 gist。 |
 
-`test/schema.test.mjs` 找不到 DSH 安装时**会失败而不是跳过**——静默跳过会让 `npm test` 全绿但实际上一个校验都没跑。做无关改动时可设 `DSH_ALLOW_SCHEMA_SKIP=1`。
+`test/schema.test.ts` 找不到 DSH 安装时**会失败而不是跳过**——静默跳过会让 `npm test` 全绿但实际上一个校验都没跑。做无关改动时可设 `DSH_ALLOW_SCHEMA_SKIP=1`。
 
-`test/safety.test.mjs` 有 skip 机制，但会在汇总里明确报告 skip 数量，而不是把它算作通过——一条 quietly 什么都不做的安全用例比没有更糟，因为它读起来像是覆盖到了。这些用例刻意写成不需要 skip：在 Windows 不授予文件符号链接权限的地方，同一段"最后一段路径"的包容检查改用目录 junction 来验证。
+`test/safety.test.ts` 有 skip 机制，但会在汇总里明确报告 skip 数量，而不是把它算作通过——一条 quietly 什么都不做的安全用例比没有更糟，因为它读起来像是覆盖到了。这些用例刻意写成不需要 skip：在 Windows 不授予文件符号链接权限的地方，同一段"最后一段路径"的包容检查改用目录 junction 来验证。
 
 回归套件与安全套件的存在，是因为变异审计发现：**43 个故意注入的 bug 里有 32 个能骗过原本的测试**，也因为随后两轮审核都发现防线只做到了它们声称的上一层。所以请把"测试通过"当成起点而非结论——最好能给出一个"改动前会失败"的用例。
 
@@ -330,7 +337,9 @@ plugin_manager  action: install_bundle  target: <此仓库的绝对路径>
 - **关掉了 `fail-fast`。** 一个平台失败不会取消其他平台——「哪个平台不同意」通常就是全部诊断信息。
 - **CI 里不含真实用例。** 它会写入真实 GitHub 账号，因此需要一个 `gist` 权限的 token，以及决定去花它的人。改动涉及 API 往返时请自己跑 `npm run test:live`；它会删除自己创建的每一个 gist。
 
-第二个任务 `schema` 是刻意独立的。`test/schema.test.mjs` 拿手写的工具定义去撞 Harness **自带**的校验器，因此需要一份 Harness 安装——而运行器上没有。它会安装 `peerDependencies` 里声明的那个版本（这样契约与声明的目标版本不会漂移），并用它跑这套校验。与此同时，矩阵那边选择接受这套件的显式跳过（`DSH_ALLOW_SCHEMA_SKIP=1`，日志里会打印 `SKIP:` 行），从而让其余用例仍然在全部十条支线上跑。这个跳过是**日志里看得见的**，而不是静默的，因为一个 quietly 什么都不跑的契约检查读起来像是覆盖到了。
+`typecheck` 任务补上的是矩阵看不见的那个缺口。`npm test` 通过 `pretest` 构建运行时，但它从不编译各套件与脚本：Node 在加载时擦除它们的类型，而擦除不等于检查。因此一处写错的测试会在上面全部七条支线上通过，只在 `npm run typecheck` 上失败。这个任务把同一条命令跑一次，跑在下限版本上，在那里运行时、每一个套件与每一个脚本被一起检查。
+
+`schema` 任务也是刻意独立的。`test/schema.test.ts` 拿手写的工具定义去撞 Harness **自带**的校验器，因此需要一份 Harness 安装——而运行器上没有。它会安装 `peerDependencies` 里声明的那个版本（这样契约与声明的目标版本不会漂移），并用它跑这套校验。与此同时，矩阵那边选择接受这套件的显式跳过（`DSH_ALLOW_SCHEMA_SKIP=1`，日志里会打印 `SKIP:` 行），从而让其余用例仍然在全部十条支线上跑。这个跳过是**日志里看得见的**，而不是静默的，因为一个 quietly 什么都不跑的契约检查读起来像是覆盖到了。
 
 这份安装逻辑放在唯一的 composite action（`.github/actions/install-harness`）里，发布任务也复用它。有两个任务需要 Harness，它们就不该各自发明一套拿 Harness 的办法——尤其发布任务**不能**沿用矩阵的那个跳过，所以那边的 `npm test` 会真的执行 schema 契约。
 

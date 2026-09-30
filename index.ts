@@ -4,7 +4,7 @@
  * Registers four agent tools that back a DeepSeek Harness profile's
  * configuration up to GitHub Gists (and restore it) through the locally
  * installed `gh` CLI. All real work lives in `./lib/core.ts`, which has no
- * Cordis dependency and is covered by `test/sync.test.mjs`.
+ * Cordis dependency and is covered by `test/sync.test.ts`.
  *
  * Tool definitions are written as plain objects rather than built with
  * `defineTool` from `@deepseek-ai/dsh-tools`, so the bundle imports nothing

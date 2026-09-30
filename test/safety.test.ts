@@ -9,7 +9,7 @@
  * still recoverable, that one sync converges, and that two host processes cannot
  * interleave their state writes.
  *
- * Run with: node test/safety.test.mjs
+ * Run with: node test/safety.test.ts
  */
 
 import assert from 'node:assert/strict'
@@ -23,32 +23,52 @@ import { promisify } from 'node:util'
 
 import * as core from '../lib/core.ts'
 
+/**
+ * The fields this file reads off a caught value: the message a failing case prints, and the
+ * Node error code `store` reads to tell "no store yet" from a real failure. A `catch` clause
+ * hands over `unknown`, so that shape is declared rather than inferred.
+ */
+type CaughtError = { message: string; code?: string }
+
+/** The `fake-gh` store file: the sequence its gist ids come from, and the gists it holds. */
+interface FakeStore {
+  seq: number
+  gists: Record<string, { files: Record<string, string> }>
+}
+
+/**
+ * The streamed body a fake raw response hands over in place of a real `ReadableStream`; `null` is
+ * allowed because a real `Response` may have no body at all.
+ */
+type FakeStreamBody = AsyncIterable<unknown> | null
+
 const run = promisify(execFile)
 const here = path.dirname(fileURLToPath(import.meta.url))
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-gist-safety-'))
-process.env.FAKE_GH_STORE = path.join(root, 'fake-store.json')
+const storePath = path.join(root, 'fake-store.json')
+process.env.FAKE_GH_STORE = storePath
 
-const fakeGh = [process.execPath, path.join(here, 'fake-gh.mjs')]
+const fakeGh = [process.execPath, path.join(here, 'fake-gh.ts')]
 const config = { dshHome: root, ghPath: fakeGh }
 const ghPath = config.ghPath
 
-const profileDir = (name) => path.join(root, 'profiles', name)
+const profileDir = (name: string) => path.join(root, 'profiles', name)
 const stateDir = path.join(root, 'gist-settings')
 const lockPath = path.join(stateDir, 'state.lock')
-const store = async () => {
+const store = async (): Promise<FakeStore> => {
   try {
-    return JSON.parse(await fs.readFile(process.env.FAKE_GH_STORE, 'utf8'))
+    return JSON.parse(await fs.readFile(storePath, 'utf8'))
   } catch (error) {
     // Only "no store yet" is a valid empty answer. Swallowing every error would let
     // a "nothing leaked" assertion pass with no evidence behind it at all.
-    if (error.code === 'ENOENT') return { seq: 0, gists: {} }
+    if ((error as CaughtError).code === 'ENOENT') return { seq: 0, gists: {} }
     throw error
   }
 }
-const read = (name, file) => fs.readFile(path.join(profileDir(name), file), 'utf8')
+const read = (name: string, file: string) => fs.readFile(path.join(profileDir(name), file), 'utf8')
 
-async function seed(name, files) {
+async function seed(name: string, files: Record<string, string>) {
   const dir = profileDir(name)
   await fs.mkdir(dir, { recursive: true })
   for (const [file, content] of Object.entries(files)) {
@@ -68,15 +88,15 @@ function deadPid() {
 
 /* ------------------------------------------------------------- mini runner -- */
 
-const results = []
-const skipped = []
+const results: boolean[] = []
+const skipped: string[] = []
 
 /**
  * Run one case. Returning a string means "skipped, and here is why" rather than
  * passing: a case that quietly does nothing on the platform we happen to be on is
  * a case that has stopped testing anything.
  */
-async function check(name, fn) {
+async function check(name: string, fn: () => Promise<string | void>) {
   try {
     const reason = await fn()
     if (typeof reason === 'string') {
@@ -89,7 +109,10 @@ async function check(name, fn) {
   } catch (error) {
     results.push(false)
     console.log(`  \u001b[31mFAIL\u001b[0m  ${name}`)
-    console.log(`        ${error.message.split('\n').join('\n        ')}`)
+    // A `catch` binding is `unknown`; every failure here is an `Error` (`assert` and the
+    // runtime both throw them), so this cast names what is already true, and is erased.
+    const failure = error as Error
+    console.log(`        ${failure.message.split('\n').join('\n        ')}`)
   }
 }
 
@@ -98,7 +121,7 @@ console.log(`\ndsh-gist-settings safety tests\n  fixture: ${root}\n`)
 /* ------------------------------------------------- tracked name validation -- */
 
 await check('a tracked name that could leave the profile directory is refused', async () => {
-  const refused = [
+  const refused: (string | number)[] = [
     // Anything with a separator, which is what every traversal needs. GitHub
     // answers a gist filename containing a slash with HTTP 422 (the live suite
     // pins that), so a separator cannot be the gist's key either way.
@@ -130,7 +153,9 @@ await check('a tracked name that could leave the profile directory is refused', 
   ]
   for (const name of refused) {
     assert.throws(
-      () => core.normalizeTrackedName(name),
+      // The entry that is not a string is part of the fixture: the validator's own runtime
+      // guard is what this case exercises, so it is passed through unchanged.
+      () => core.normalizeTrackedName(name as string),
       /invalid tracked file name/,
       `expected ${JSON.stringify(name)} to be refused`,
     )
@@ -303,7 +328,8 @@ await check('a failed commit restores what it wrote and leaves an external edit 
     }
   }, 1)
 
-  let error = null
+  // Assigned by the catch below; every read is preceded by `assert.ok(error, …)`.
+  let error: Error | undefined
   try {
     await core.downloadProfile('rollback', { ghPath, config: bulk, force: true }).catch((thrown) => {
       error = thrown
@@ -357,7 +383,8 @@ await check('a tracked file named rollback cannot break the rollback', async () 
     }
   }, 1)
 
-  let error = null
+  // Assigned by the catch below; every read is preceded by `assert.ok(error, …)`.
+  let error: Error | undefined
   try {
     await core.downloadProfile('collide', { ghPath, config: bulk, force: true }).catch((thrown) => {
       error = thrown
@@ -409,7 +436,8 @@ await check('a target that cannot be read back is reported as unverified, not as
     }
   }, 1)
 
-  let error = null
+  // Assigned by the catch below; every read is preceded by `assert.ok(error, …)`.
+  let error: Error | undefined
   try {
     await core.downloadProfile('unreadable', { ghPath, config: bulk, force: true }).catch((thrown) => {
       error = thrown
@@ -523,8 +551,8 @@ await check('one sync repairs a tracked file the gist dropped, instead of needin
 
 await check('two processes sharing a state directory cannot interleave their critical sections', async () => {
   const logPath = path.join(root, 'lock-order.log')
-  const worker = path.join(here, 'lock-worker.mjs')
-  const start = (tag) => run(process.execPath, [worker, logPath, tag, '250', root])
+  const worker = path.join(here, 'lock-worker.ts')
+  const start = (tag: string) => run(process.execPath, [worker, logPath, tag, '250', root])
 
   await Promise.all([start('a'), start('b')])
   const lines = (await fs.readFile(logPath, 'utf8')).trim().split('\n')
@@ -593,8 +621,8 @@ await check('two waiters racing one stale lock cannot both enter the critical se
   // removes the first one's fresh lock — after which both are inside.
   await fs.writeFile(lockPath, `${pid} ${os.hostname()}\n`, 'utf8')
 
-  const worker = path.join(here, 'lock-worker.mjs')
-  const start = (tag) => run(process.execPath, [worker, logPath, tag, '200', root])
+  const worker = path.join(here, 'lock-worker.ts')
+  const start = (tag: string) => run(process.execPath, [worker, logPath, tag, '200', root])
   await Promise.all([start('a'), start('b'), start('c')])
 
   const lines = (await fs.readFile(logPath, 'utf8')).trim().split('\n')
@@ -825,7 +853,8 @@ await check('an untracked truncated file cannot make the profile unreachable', a
 
 await check('a tracked truncated file with an untrusted raw_url is still refused', async () => {
   const state = await core.loadState(config)
-  const gistId = state.profiles.extra.gistId
+  // `extra` was recorded by the upload case above, so its record is present.
+  const gistId = state.profiles.extra!.gistId
   process.env.FAKE_GH_TRUNCATE = 'notes.txt'
   process.env.FAKE_GH_RAW_BASE = 'https://elsewhere.example/collect'
   try {
@@ -836,7 +865,8 @@ await check('a tracked truncated file with an untrusted raw_url is still refused
     // A read that fails is `unreachable`, never "deleted" — and never silently
     // treated as a file the profile does not have.
     assert.equal(status.status, 'unreachable')
-    assert.match(status.error, /not a trusted GitHub URL/)
+    // `unreachable` is only ever reported together with the error that caused it.
+    assert.match(status.error!, /not a trusted GitHub URL/)
     // Still reported as truncated to a caller that asks for it, and refused when
     // that caller tracks it — skipping must not mean forgetting.
     assert.deepEqual((await core.gistGet(ghPath, gistId, { only: ['cordis.patch.yml'] })).truncated, [
@@ -853,7 +883,8 @@ await check('a transport failure while fetching raw content falls back to gh', a
   // which gh honours, so on a machine that can only reach GitHub through a proxy
   // the direct request fails. The request gh would have made still has to work.
   const state = await core.loadState(config)
-  const gistId = state.profiles.extra.gistId
+  // `extra` was recorded by the upload case above, so its record is present.
+  const gistId = state.profiles.extra!.gistId
   process.env.FAKE_GH_TRUNCATE = 'cordis.patch.yml'
   try {
     const gist = await core.gistGet(ghPath, gistId, {
@@ -908,7 +939,7 @@ await check('a profile directory swapped for a link mid-download cannot redirect
       }
       swapped = true
     } catch (error) {
-      why = error.message.split('\n')[0]
+      why = (error as CaughtError).message.split('\n')[0]
       // Put the directory back only if the rename actually moved it, then retry on
       // the next tick: a single refused attempt must not take the fixture apart.
       if (fsSync.existsSync(parked)) {
@@ -1006,9 +1037,12 @@ await check('a raw response that does not report its final URL is refused', asyn
   try {
     await assert.rejects(
       () =>
-        core.gistGet(ghPath, state.profiles.extra.gistId, {
+        // `extra` was recorded by the upload case above, so its record is present.
+        core.gistGet(ghPath, state.profiles.extra!.gistId, {
           only: ['cordis.patch.yml'],
-          fetchImpl: async () => ({ ok: true, status: 200, statusText: 'OK', text: async () => 'x' }),
+          // The seam is typed as a real `fetch`, so a partial response is asserted to one: these
+          // fakes carry only the fields the module reads.
+          fetchImpl: async () => ({ ok: true, status: 200, statusText: 'OK', text: async () => 'x' }) as Response,
         }),
       /did not report its final URL/,
       'a response that cannot be shown to have stayed on GitHub must not be trusted',
@@ -1033,17 +1067,20 @@ await check('a stale-baseline repair does not overwrite a baseline another write
   // move the baseline backwards and turn the next ordinary edit into a false
   // divergence.
   const observed = await core.loadState(config)
-  observed.profiles.cas.lastSyncedHash = core.hashFiles({ 'cordis.patch.yml': 'A1\n' })
+  // `cas` was recorded by the upload above, so the record this case edits is present.
+  observed.profiles.cas!.lastSyncedHash = core.hashFiles({ 'cordis.patch.yml': 'A1\n' })
 
   const advanced = await core.loadState(config)
   const newer = core.hashFiles({ 'cordis.patch.yml': 'A3\n' })
-  advanced.profiles.cas.lastSyncedHash = newer
+  // The same recorded profile, re-read for the compare-and-set below.
+  advanced.profiles.cas!.lastSyncedHash = newer
   await core.saveState(advanced, config)
 
   const status = await core.profileStatus('cas', { ghPath, config: one, state: observed })
   assert.equal(status.status, 'in-sync')
   assert.equal(
-    (await core.loadState(config)).profiles.cas.lastSyncedHash,
+    // And the record `saveState` just wrote.
+    (await core.loadState(config)).profiles.cas!.lastSyncedHash,
     newer,
     'a repair must be a compare-and-set, not a blind write',
   )
@@ -1053,7 +1090,8 @@ await check('a stale-baseline repair does not overwrite a baseline another write
 
 await check('a raw response that redirected off the trusted host is refused', async () => {
   const state = await core.loadState(config)
-  const gistId = state.profiles.extra.gistId
+  // `extra` was recorded by the upload case above, so its record is present.
+  const gistId = state.profiles.extra!.gistId
   process.env.FAKE_GH_TRUNCATE = 'cordis.patch.yml'
   try {
     await assert.rejects(
@@ -1066,7 +1104,7 @@ await check('a raw response that redirected off the trusted host is refused', as
             statusText: 'OK',
             url: 'https://evil.example/collected',
             text: async () => 'attacker body',
-          }),
+          } as Response),
         }),
       /not a trusted GitHub URL/,
       'the final URL has to be checked, not just the one that was requested',
@@ -1078,10 +1116,11 @@ await check('a raw response that redirected off the trusted host is refused', as
 
 await check('raw content is fetched under its own deadline and read as a stream', async () => {
   const state = await core.loadState(config)
-  const gistId = state.profiles.extra.gistId
+  // `extra` was recorded by the upload case above, so its record is present.
+  const gistId = state.profiles.extra!.gistId
   process.env.FAKE_GH_TRUNCATE = 'cordis.patch.yml'
   try {
-    let seen = null
+    let seen: RequestInit | null | undefined = null
     const gist = await core.gistGet(ghPath, gistId, {
       only: ['cordis.patch.yml'],
       fetchImpl: async (url, options) => {
@@ -1097,13 +1136,15 @@ await check('raw content is fetched under its own deadline and read as a stream'
           body: (async function* streamed() {
             yield Buffer.from('extra: ')
             yield Buffer.from('1\n')
-          })(),
-        }
+          })() as FakeStreamBody,
+        } as Response
       },
     })
     assert.equal(gist.files['cordis.patch.yml'], 'extra: 1\n', 'a streamed body must be assembled in order')
-    assert.ok(seen.signal instanceof AbortSignal, 'the request must carry a deadline of its own')
-    assert.equal(seen.redirect, 'follow')
+    // `seen` is assigned by the fetchImpl above, which had to run for the streamed body
+    // just asserted to have been assembled.
+    assert.ok(seen!.signal instanceof AbortSignal, 'the request must carry a deadline of its own')
+    assert.equal(seen!.redirect, 'follow')
   } finally {
     delete process.env.FAKE_GH_TRUNCATE
   }
@@ -1111,7 +1152,8 @@ await check('raw content is fetched under its own deadline and read as a stream'
 
 await check('a raw request that fails at the transport falls back, and reports a failing fallback', async () => {
   const state = await core.loadState(config)
-  const gistId = state.profiles.extra.gistId
+  // `extra` was recorded by the upload case above, so its record is present.
+  const gistId = state.profiles.extra!.gistId
   process.env.FAKE_GH_TRUNCATE = 'cordis.patch.yml'
   process.env.FAKE_GH_FAIL_RAW = '1'
   try {

@@ -18,8 +18,8 @@ guarded two-way sync are exposed as agent tools, so you can drive them from a co
 | Sync engine (`lib/core.ts`) | Done |
 | Host plugin + agent tools | **Installed and live**; callable from a session |
 | Real GitHub round-trip | **Verified** against a real account |
-| Test suite | **180 offline cases across seven suites, plus 12 live cases**, all passing |
-| CI | Offline suites and repository checks on Linux, Windows and macOS, Node 22.19.0, 22.x and 24.x |
+| Test suite | **186 offline cases across eight suites, plus 12 live cases**, all passing |
+| CI | Offline suites and repository checks on Linux, Windows and macOS, Node 22.19.0, 22.x and 24.x, plus a repository-wide type check |
 | Client settings page | Not started — see [The settings page](#the-settings-page) |
 | Licence | MIT |
 
@@ -247,12 +247,12 @@ gist is unlisted, not access-controlled. Node's `fetch` does not honour `HTTP(S)
 certificate store the way `gh` does, so a *transport* failure falls back to the request `gh` would have
 made; an HTTP error status does not, because a 404 has to stay a 404. Truncation is resolved only for
 files this profile tracks, so a large attachment someone added through the web UI neither costs a
-request on every status call nor can break one. `test/regression.test.mjs` pins the offline half of
-this, and `test/live.test.mjs` round-trips a 1.5 MB file against real GitHub to prove the rest.
+request on every status call nor can break one. `test/regression.test.ts` pins the offline half of
+this, and `test/live.test.ts` round-trips a 1.5 MB file against real GitHub to prove the rest.
 
 **No imports from the Harness installation.** Tool definitions are written as plain objects matching
 the shape `defineTool` produces. This keeps the bundle immune to module-resolution changes;
-`test/schema.test.mjs` replays the Harness's own validators so the definitions cannot silently drift
+`test/schema.test.ts` replays the Harness's own validators so the definitions cannot silently drift
 out of contract. The trade-off is that the Harness's version gate cannot see the plugin either, so
 `peerDependencies` pins the DSH version it was written against.
 
@@ -272,8 +272,8 @@ cordis.patch.yml       Bundle patch (inserts the plugin row; documents config)
 client.js              Client settings page (not yet written)
 locale/{en,zh}.json    Plugin display metadata for Plugin Manager cards
 icon.svg               Bundle icon
-test/                  180 offline cases across seven suites, plus 12 live ones
-scripts/               check-changelog.mjs — validates CHANGELOG.md
+test/                  186 offline cases across eight suites, plus 12 live ones
+scripts/               check-changelog.ts — validates CHANGELOG.md
 .github/               Issue forms and the pull-request template
 ```
 
@@ -317,17 +317,20 @@ any file it resolves under `node_modules` — it throws `ERR_UNSUPPORTED_NODE_MO
 the package cannot be run as raw TypeScript. `npm run build` instead emits `dist/index.js`,
 `dist/lib/core.js` and matching `.d.ts` files, and `package.json`'s `exports["."]` names
 `./dist/index.js`; `dist/` is regenerated output, never edited by hand and never committed. The suites
-and `scripts/` stay plain ESM `.mjs` and import the `.ts` sources directly, which works for the
-inverted reason — Node does strip types outside `node_modules` — so a single suite still runs as
-`node test/sync.test.mjs`.
+and `scripts/` are TypeScript as well, and nothing compiles them: they import the `.ts` sources
+directly and Node strips the types as it loads them, which works for the inverted reason the build
+exists — outside `node_modules`, stripping is allowed. A single suite therefore still runs as
+`node test/sync.test.ts` with no build step; only `test/entry.test.ts` needs `dist/`, and `npm test`
+builds first. `tsconfig.check.json` covers all three — runtime, tests, scripts — so `npm run typecheck`
+fails on a mistyped test exactly as it fails on a mistyped engine.
 
-`test/fake-gh.mjs` is an in-memory stand-in for `gh` implementing `--version`, `auth status`, and the
+`test/fake-gh.ts` is an in-memory stand-in for `gh` implementing `--version`, `auth status`, and the
 `/gists` API, with optional injection of truncated files, an untrusted `raw_url` host, HTTP 500s and a
 logged-out CLI. The `sync`, `tools`, `regression` and `safety` suites point `ghPath` at it, so the
 whole lifecycle — create, upload, download, divergence, backup, pruning, gist recreation, idempotency,
 recovery — runs offline with no GitHub account.
 
-`test/schema.test.mjs` locates the installed `@deepseek-ai/dsh-tools` from `process.execPath`
+`test/schema.test.ts` locates the installed `@deepseek-ai/dsh-tools` from `process.execPath`
 (searched first when you set `DSH_TOOLS_DIR`) and replays the runtime's own checks: the registration
 contract, the
 supported JSON Schema subset, argument validation, and that each tool's returned value satisfies its
@@ -335,7 +338,7 @@ declared output schema. **Finding no installation fails the suite** rather than 
 silent skip would leave `npm test` green with none of those checks having run; set
 `DSH_ALLOW_SCHEMA_SKIP=1` to accept the skip deliberately.
 
-`test/live.test.mjs` is **opt-in** because it creates a real secret gist. It works inside a throwaway
+`test/live.test.ts` is **opt-in** because it creates a real secret gist. It works inside a throwaway
 `DSH_HOME` under the OS temp directory, so no real profile is read or written, and it deletes every
 gist it created even when an assertion fails. Besides the `gh api` round trip it covers the one path a
 fake cannot vouch for: a 1.5 MB file, which real GitHub truncates in the JSON response, coming back
@@ -385,7 +388,7 @@ exists only to be installed as a local bundle. That is orthogonal to the licence
 An adversarial review of this repository found, among other things: a `gh` failure that could kill
 the whole Harness process; every gist read error being read as "deleted", silently forking backups;
 and an upload that deleted the gist's only copy of a file that was merely missing from disk. All of
-those are fixed and covered by `test/regression.test.mjs`, whose cases are written to fail if the fix
+those are fixed and covered by `test/regression.test.ts`, whose cases are written to fail if the fix
 is reverted. The review also confirmed several things were already sound: the registration contract,
 the effect and disposal lifecycle, the manifest, and the divergence classifier when both sides hash
 the same file set.
@@ -408,5 +411,5 @@ tracked names that fold to one file were accepted and then made every download f
 write reported a lost download and left a temp file behind; the `fetch` used for truncated content had
 no timeout, no size cap, no redirect check and no proxy fallback; a large untracked file could make the
 whole profile unreachable; and the prose claimed a remote deletion could be applied with
-`gist_download force`, which no code path did. `test/safety.test.mjs`, `test/regression.test.mjs` and
-`test/live.test.mjs` pin each one.
+`gist_download force`, which no code path did. `test/safety.test.ts`, `test/regression.test.ts` and
+`test/live.test.ts` pin each one.

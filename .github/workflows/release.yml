@@ -6,12 +6,12 @@ name: Release
 #
 # It validates before it publishes. The common mistake is tagging before the
 # version bump merged, which would ship a release whose notes and package version
-# contradict the tag; `scripts/release-notes.mjs` refuses that, and writes nothing
+# contradict the tag; `scripts/release-notes.ts` refuses that, and writes nothing
 # to stdout when it refuses, so a failure cannot publish empty notes.
 #
 # `npm test` runs here with a real Harness installed, exactly as the CI `schema` job
 # does, rather than with the skip the platform matrix uses. Without it this job would
-# have died in `test/schema.test.mjs` — before it published anything — on the first
+# have died in `test/schema.test.ts` — before it published anything — on the first
 # tag anybody pushed.
 #
 # The Node version is the floor `engines` names, which is the Harness's own floor:
@@ -49,12 +49,17 @@ jobs:
       - uses: ./.github/actions/install-harness
 
       # Exactly what CI runs, on the commit the tag points at — including the schema
-      # contract, which has a Harness to run against here.
+      # contract, which has a Harness to run against here. The type check is part of that
+      # set: `npm test` builds the runtime without checking the suites or the scripts, so
+      # without it a tag could publish a commit that CI's own `typecheck` job rejects.
       - name: Offline suites and repository checks
         run: npm test
 
+      - name: Type-check the whole repository
+        run: npm run typecheck
+
       - name: Generate the notes from the changelog section
-        run: node scripts/release-notes.mjs "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"
+        run: node scripts/release-notes.ts "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"
 
       - name: Publish the release
         env:

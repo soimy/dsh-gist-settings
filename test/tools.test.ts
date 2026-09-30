@@ -3,10 +3,10 @@
  * Exercise the Host plugin's tool layer in isolation.
  *
  * `apply()` is driven with a stub context that captures the registered tool
- * definitions, so the four tools can be executed against `test/fake-gh.mjs`
+ * definitions, so the four tools can be executed against `test/fake-gh.ts`
  * without installing the bundle into a profile.
  *
- * Run with: node test/tools.test.mjs
+ * Run with: node test/tools.test.ts
  */
 
 import assert from 'node:assert/strict'
@@ -19,7 +19,8 @@ import { apply } from '../index.ts'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-gist-tools-'))
-process.env.FAKE_GH_STORE = path.join(root, 'fake-store.json')
+const storePath = path.join(root, 'fake-store.json')
+process.env.FAKE_GH_STORE = storePath
 
 for (const name of ['alpha', 'beta']) {
   const dir = path.join(root, 'profiles', name)
@@ -28,10 +29,42 @@ for (const name of ['alpha', 'beta']) {
   await fs.writeFile(path.join(dir, 'package.json'), `{\n  "name": "${name}"\n}\n`, 'utf8')
 }
 
+/**
+ * One registered tool, in the shape this suite drives it. `index.ts` keeps its own
+ * tool interface private, so the two are kept in step by the `apply` call below.
+ */
+interface StubToolDefinition {
+  name: string
+  description: string
+  parameters: { type: string }
+  output: {
+    render(args: unknown, value: StubToolValue): Array<{ type: string; text: string }>
+  }
+  execute(args: unknown, exec: { signal?: AbortSignal } | undefined): Promise<StubToolValue>
+}
+
+/** The canonical value a tool returns; `output.render` projects it into content blocks. */
+interface StubToolValue {
+  text: string
+}
+
+/** The slice of the plugin context this stub stands in for. */
+interface StubContext {
+  tools: {
+    register(tool: StubToolDefinition): () => void
+  }
+  effect(body: () => Generator<() => void, void, unknown>, label: string): void
+}
+
+/** The fake gh store, as far as the one case that rewrites it looks. */
+interface FakeGhStore {
+  gists: Record<string, unknown>
+}
+
 /* Capture the tool definitions the plugin registers, the way the runtime would. */
-const tools = new Map()
-const disposeLabels = []
-const ctx = {
+const tools = new Map<string, StubToolDefinition>()
+const disposeLabels: string[] = []
+const ctx: StubContext = {
   tools: {
     register(definition) {
       tools.set(definition.name, definition)
@@ -47,7 +80,7 @@ const ctx = {
 
 apply(ctx, {
   dshHome: root,
-  ghPath: [process.execPath, path.join(here, 'fake-gh.mjs')],
+  ghPath: [process.execPath, path.join(here, 'fake-gh.ts')],
 })
 
 /**
@@ -55,7 +88,7 @@ apply(ctx, {
  * value through `output.render`. Asserting the block shape here is the only
  * place it is checked — the suite previously never called `render` at all.
  */
-async function call(name, args) {
+async function call(name: string, args?: unknown): Promise<string> {
   const definition = tools.get(name)
   assert.ok(definition, `tool ${name} was not registered`)
   const value = await definition.execute(args, { signal: undefined })
@@ -67,8 +100,8 @@ async function call(name, args) {
 
 /* ------------------------------------------------------------- mini runner -- */
 
-const results = []
-async function check(name, fn) {
+const results: boolean[] = []
+async function check(name: string, fn: () => Promise<void> | void): Promise<void> {
   try {
     await fn()
     results.push(true)
@@ -76,7 +109,10 @@ async function check(name, fn) {
   } catch (error) {
     results.push(false)
     console.log(`  \u001b[31mFAIL\u001b[0m  ${name}`)
-    console.log(`        ${error.message.split('\n').join('\n        ')}`)
+    // A `catch` binding is `unknown`; every failure here is an `Error` (`assert` and the
+    // runtime both throw them), so this cast names what is already true, and is erased.
+    const failure = error as Error
+    console.log(`        ${failure.message.split('\n').join('\n        ')}`)
   }
 }
 
@@ -157,9 +193,9 @@ await check('a single-profile call is scoped to that profile', async () => {
 })
 
 await check('a failing profile is reported without aborting the others', async () => {
-  const gistState = JSON.parse(await fs.readFile(process.env.FAKE_GH_STORE, 'utf8'))
+  const gistState: FakeGhStore = JSON.parse(await fs.readFile(storePath, 'utf8'))
   for (const id of Object.keys(gistState.gists)) delete gistState.gists[id]
-  await fs.writeFile(process.env.FAKE_GH_STORE, JSON.stringify(gistState), 'utf8')
+  await fs.writeFile(storePath, JSON.stringify(gistState), 'utf8')
 
   const body = await call('gist_sync')
   assert.match(body, /alpha: created/)

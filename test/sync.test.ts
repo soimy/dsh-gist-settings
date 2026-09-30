@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * End-to-end exercise of `lib/core.js` against `test/fake-gh.mjs`.
+ * End-to-end exercise of `lib/core.ts` against `test/fake-gh.ts`.
  *
  * Runs the full lifecycle — create, upload, detect a local change, detect a
  * remote change, refuse a true divergence, prune remote files, and recover from
  * a deleted gist — with no network access and no GitHub account.
  *
- * Run with: node test/sync.test.mjs
+ * Run with: node test/sync.test.ts
  */
 
 import assert from 'node:assert/strict'
@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url'
 import * as core from '../lib/core.ts'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-const fakeGh = [process.execPath, path.join(here, 'fake-gh.mjs')]
+const fakeGh = [process.execPath, path.join(here, 'fake-gh.ts')]
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-gist-test-'))
 process.env.FAKE_GH_STORE = path.join(root, 'fake-store.json')
@@ -26,7 +26,7 @@ process.env.FAKE_GH_STORE = path.join(root, 'fake-store.json')
 const config = { dshHome: root, ghPath: fakeGh }
 const ghPath = config.ghPath
 
-async function seedProfile(name, files) {
+async function seedProfile(name: string, files: Record<string, string>) {
   const dir = path.join(root, 'profiles', name)
   await fs.mkdir(dir, { recursive: true })
   for (const [file, content] of Object.entries(files)) {
@@ -34,7 +34,7 @@ async function seedProfile(name, files) {
   }
 }
 
-async function readProfileFile(name, file) {
+async function readProfileFile(name: string, file: string) {
   return fs.readFile(path.join(root, 'profiles', name, file), 'utf8')
 }
 
@@ -49,8 +49,8 @@ await seedProfile('beta', {
 
 /* ------------------------------------------------------------- mini runner -- */
 
-const results = []
-async function check(name, fn) {
+const results: boolean[] = []
+async function check(name: string, fn: () => Promise<void>) {
   try {
     await fn()
     results.push(true)
@@ -58,11 +58,14 @@ async function check(name, fn) {
   } catch (error) {
     results.push(false)
     console.log(`  \u001b[31mFAIL\u001b[0m  ${name}`)
-    console.log(`        ${error.message.split('\n').join('\n        ')}`)
+    // A `catch` binding is `unknown`; every failure here is an `Error` (`assert` and the
+    // runtime both throw them), so this cast names what is already true, and is erased.
+    const failure = error as Error
+    console.log(`        ${failure.message.split('\n').join('\n        ')}`)
   }
 }
 
-function statusOf(rows, profile) {
+function statusOf(rows: core.ProfileStatus[], profile: string): core.ProfileStatusName {
   const row = rows.find((r) => r.profile === profile)
   assert.ok(row, `no status row for ${profile}`)
   return row.status
@@ -77,8 +80,10 @@ await check('health() locates the gh command and reads auth state', async () => 
   assert.equal(h.gh.found, true)
   assert.equal(h.gh.version, 'gh version 0.0.0-fake (test-double)')
   assert.deepEqual(h.gh.path, fakeGh)
-  assert.equal(h.auth.authenticated, true)
-  assert.equal(h.auth.account, 'testuser')
+  // `health()` only ever reports `found: true` on the branch that also fills in `auth`
+  // — the not-found branch returns `auth: null` — which the assertions above pin down.
+  assert.equal(h.auth!.authenticated, true)
+  assert.equal(h.auth!.account, 'testuser')
 })
 
 await check('listProfiles() finds both seeded profiles', async () => {
@@ -92,7 +97,9 @@ await check('both profiles start untracked', async () => {
   assert.equal(statusOf(profiles, 'beta'), 'untracked')
 })
 
-let alphaGistId
+// Assigned by the create case just below, and `check` awaits each case before the
+// runner moves on, so it is set before any later case reads it.
+let alphaGistId!: string
 await check('uploadProfile() creates a secret gist on first upload', async () => {
   const result = await core.uploadProfile('alpha', { ghPath, config })
   assert.equal(result.created, true)
@@ -232,8 +239,10 @@ await check('state.json records one gist per profile', async () => {
   const state = await core.loadState(config)
   assert.deepEqual(Object.keys(state.profiles).sort(), ['alpha', 'beta'])
   for (const profile of ['alpha', 'beta']) {
-    assert.ok(state.profiles[profile].gistId, `${profile} should have a gistId`)
-    assert.ok(state.profiles[profile].lastSyncedHash, `${profile} should have a baseline hash`)
+    // The deepEqual above proves both names are keys of `profiles`, and `loadState`
+    // keeps only records it found a gistId on, so neither value can be absent.
+    assert.ok(state.profiles[profile]!.gistId, `${profile} should have a gistId`)
+    assert.ok(state.profiles[profile]!.lastSyncedHash, `${profile} should have a baseline hash`)
   }
 })
 

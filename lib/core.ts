@@ -413,7 +413,7 @@ const WINDOWS_DEVICE_NAME = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/i
  * slash with `HTTP 422 Validation Failed`, and that filename is exactly what has to
  * be sent. A backslash is legal in a gist filename but is a separator on Windows,
  * so accepting it would mean one name for the local path and another for the gist.
- * Rejecting both keeps one name meaning one file everywhere. `test/live.test.mjs`
+ * Rejecting both keeps one name meaning one file everywhere. `test/live.test.ts`
  * pins the API behaviour, so this can be revisited if GitHub ever allows it.
  *
  * The check refuses rather than repairs: `a/../b` is an error, not a quiet rewrite

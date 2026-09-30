@@ -2,7 +2,7 @@
 /**
  * Exercise the documentation checker.
  *
- * `scripts/check-docs.mjs` runs as part of `npm test`, so a bug in it fails the
+ * `scripts/check-docs.ts` runs as part of `npm test`, so a bug in it fails the
  * build for the wrong reason — and, worse, a bug that makes it miss a link lets a
  * broken document through while nobody notices. Both have happened: destinations
  * wrapped in angle brackets were truncated at the space, destinations containing
@@ -13,7 +13,7 @@
  * Each case builds a miniature checkout: the two cross-linked READMEs the checker
  * requires, so the only thing under test is the case's own link.
  *
- * Run with: node test/docs.test.mjs  (also part of `npm test`)
+ * Run with: node test/docs.test.ts  (also part of `npm test`)
  */
 
 import assert from 'node:assert/strict'
@@ -26,14 +26,24 @@ import { promisify } from 'node:util'
 
 const run = promisify(execFile)
 const here = path.dirname(fileURLToPath(import.meta.url))
-const script = path.join(here, '..', 'scripts', 'check-docs.mjs')
+const script = path.join(here, '..', 'scripts', 'check-docs.ts')
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-gist-docs-'))
 
+interface CheckoutOptions {
+  extra?: (dir: string) => Promise<void>
+}
+
+interface ExecFailure {
+  code?: number | string | null
+  stdout?: string
+  stderr?: string
+}
+
 /** Build a checkout whose only interesting content is `body` in notes.md. */
-async function checkout(body, { extra = async () => {} } = {}) {
+async function checkout(body: string, { extra = async () => {} }: CheckoutOptions = {}) {
   const dir = await fs.mkdtemp(path.join(root, 'case-'))
   await fs.mkdir(path.join(dir, 'scripts'), { recursive: true })
-  await fs.copyFile(script, path.join(dir, 'scripts', 'check-docs.mjs'))
+  await fs.copyFile(script, path.join(dir, 'scripts', 'check-docs.ts'))
   await extra(dir)
   await fs.writeFile(path.join(dir, 'README.md'), '[中文](README.zh-CN.md)\n\n[notes](notes.md)\n')
   await fs.writeFile(path.join(dir, 'README.zh-CN.md'), '[English](README.md)\n')
@@ -41,17 +51,19 @@ async function checkout(body, { extra = async () => {} } = {}) {
   return dir
 }
 
-async function checkDocs(dir) {
+async function checkDocs(dir: string) {
   try {
-    const { stdout } = await run(process.execPath, ['scripts/check-docs.mjs'], { cwd: dir })
+    const { stdout } = await run(process.execPath, ['scripts/check-docs.ts'], { cwd: dir })
     return { code: 0, output: stdout }
   } catch (error) {
-    return { code: error.code ?? 1, output: `${error.stdout ?? ''}${error.stderr ?? ''}` }
+    // `run` rejects with the failure object `execFile` builds for the child process.
+    const failure = error as ExecFailure
+    return { code: failure.code ?? 1, output: `${failure.stdout ?? ''}${failure.stderr ?? ''}` }
   }
 }
 
 /** A directory link that needs no privilege on either platform. */
-function linkDirectory(target, at) {
+function linkDirectory(target: string, at: string) {
   if (process.platform === 'win32') {
     execFileSync('cmd', ['/c', 'mklink', '/J', at, target], { stdio: 'ignore' })
   } else {
@@ -61,8 +73,8 @@ function linkDirectory(target, at) {
 
 /* ------------------------------------------------------------- mini runner -- */
 
-const results = []
-async function check(name, fn) {
+const results: boolean[] = []
+async function check(name: string, fn: () => Promise<void>) {
   try {
     await fn()
     results.push(true)
@@ -70,7 +82,10 @@ async function check(name, fn) {
   } catch (error) {
     results.push(false)
     console.log(`  \u001b[31mFAIL\u001b[0m  ${name}`)
-    console.log(`        ${error.message.split('\n').join('\n        ')}`)
+    // A `catch` binding is `unknown`; every failure here is an `Error` (`assert` and the
+    // runtime both throw them), so this cast names what is already true, and is erased.
+    const failure = error as Error
+    console.log(`        ${failure.message.split('\n').join('\n        ')}`)
   }
 }
 
@@ -126,7 +141,7 @@ await check('an escaped hash stays part of the name', async () => {
 })
 
 await check('a link through an in-repo directory link to an outside file is refused', async () => {
-  let outside = null
+  let outside: string | null = null
   const dir = await checkout('[x](link/secret.md)', {
     extra: async (where) => {
       outside = path.join(path.dirname(where), 'outside')
@@ -171,7 +186,7 @@ await check('a reference definition with an angle-bracket destination resolves',
 await check('a missing README pairing is refused', async () => {
   const dir = await fs.mkdtemp(path.join(root, 'pair-'))
   await fs.mkdir(path.join(dir, 'scripts'), { recursive: true })
-  await fs.copyFile(script, path.join(dir, 'scripts', 'check-docs.mjs'))
+  await fs.copyFile(script, path.join(dir, 'scripts', 'check-docs.ts'))
   await fs.writeFile(path.join(dir, 'README.md'), 'no pairing here\n')
   const { code, output } = await checkDocs(dir)
   assert.equal(code, 1)
