@@ -246,6 +246,7 @@ locale/{en,zh}.json    Plugin Manager 卡片用的展示元数据
 icon.svg               bundle 图标
 test/                  八套共 187 项离线用例，另有 12 项真实用例
 scripts/               check-changelog.ts —— 校验 CHANGELOG.md
+docs/                  长文文档：user/ 与 contributor/ 页面、发行索引、计划、设计规格
 .github/               Issue 表单与 PR 模板
 ```
 
@@ -255,6 +256,8 @@ scripts/               check-changelog.ts —— 校验 CHANGELOG.md
 |---|---|
 | [README.md](README.md) | 本文件的英文版。两份保持同步；只改其中一份的行为变更不算完成。 |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 报告问题、开发环境、每套测试证明什么，以及 changelog、提交与发布约定。 |
+| [`docs/`](docs/index.md) | 长文文档：安装与更新、工具与配置参考、恢复与排障，以及贡献者向的架构、开发、测试与发版页面。 |
+| [AGENTS.md](AGENTS.md) | 自动化智能体在本仓库工作所遵循的约束与文档约定。 |
 | [CHANGELOG.md](CHANGELOG.md) | 所有值得记录的变更，最新在前，遵循 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)。 |
 | [LICENSE](LICENSE) | MIT。 |
 
@@ -265,6 +268,9 @@ scripts/               check-changelog.ts —— 校验 CHANGELOG.md
 就会跳过 devDependencies，而那次安装会以退出码 0 结束、什么都没装 —— 这看起来像成功，直到 `tsc`
 找不到为止。插件仍然没有**运行时**依赖：除 `node:` 外不 import 任何东西，也不自带任何依赖，因此
 编译器只是开发工具。
+
+本节的长文版本 —— 类型擦除带来的约束、代码风格，以及每套测试各自证明什么 —— 在
+[`docs/contributor/`](docs/contributor/index.md)。
 
 ```bash
 npm run build           # tsc -p tsconfig.json → dist/，即 Harness 加载的 JavaScript

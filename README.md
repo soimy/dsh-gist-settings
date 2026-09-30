@@ -278,6 +278,7 @@ locale/{en,zh}.json    Plugin display metadata for Plugin Manager cards
 icon.svg               Bundle icon
 test/                  187 offline cases across eight suites, plus 12 live ones
 scripts/               check-changelog.ts — validates CHANGELOG.md
+docs/                  Long-form documentation: user/ and contributor/ pages, releases index, plans, specs
 .github/               Issue forms and the pull-request template
 ```
 
@@ -287,6 +288,8 @@ scripts/               check-changelog.ts — validates CHANGELOG.md
 |---|---|
 | [README.zh-CN.md](README.zh-CN.md) | This README in Chinese. The two are kept in sync; a behaviour change that updates only one is incomplete. |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Reporting, development setup, what each test suite proves, and the changelog, commit and release conventions. |
+| [`docs/`](docs/index.md) | The long form: install and update, the tool and configuration reference, recovery and troubleshooting, and the contributor pages on architecture, development, testing and releasing. |
+| [AGENTS.md](AGENTS.md) | The constraints and conventions an automated agent working in this repository follows. |
 | [CHANGELOG.md](CHANGELOG.md) | Every notable change, newest first, in [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) form. |
 | [LICENSE](LICENSE) | MIT. |
 
@@ -298,6 +301,9 @@ npm omits devDependencies whenever `NODE_ENV=production`, and such an install ex
 nothing, which reads as success right up until `tsc` is missing. The plugin still has no *runtime*
 dependency: it imports nothing outside `node:` and ships no dependency of its own, so the compiler is a
 development tool only.
+
+The long form of this section — the constraints the type stripper imposes, the house style, and what each
+suite proves — is in [`docs/contributor/`](docs/contributor/index.md).
 
 ```bash
 npm run build           # tsc -p tsconfig.json → dist/, the JavaScript the Harness loads
